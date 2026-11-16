@@ -7,10 +7,16 @@ pub enum Kernel {
 }
 impl Kernel {
     pub fn label(self) -> &'static str {
-        match self { Self::Binary => "gentoo-kernel-bin", Self::Source => "gentoo-kernel" }
+        match self {
+            Self::Binary => "gentoo-kernel-bin",
+            Self::Source => "gentoo-kernel",
+        }
     }
     pub fn package(self) -> &'static str {
-        match self { Self::Binary => "sys-kernel/gentoo-kernel-bin", Self::Source => "sys-kernel/gentoo-kernel" }
+        match self {
+            Self::Binary => "sys-kernel/gentoo-kernel-bin",
+            Self::Source => "sys-kernel/gentoo-kernel",
+        }
     }
 }
 
@@ -21,7 +27,10 @@ pub enum Bootloader {
 }
 impl Bootloader {
     pub fn label(self) -> &'static str {
-        match self { Self::SystemdBoot => "systemd-boot", Self::Grub => "GRUB (UEFI)" }
+        match self {
+            Self::SystemdBoot => "systemd-boot",
+            Self::Grub => "GRUB (UEFI)",
+        }
     }
 }
 

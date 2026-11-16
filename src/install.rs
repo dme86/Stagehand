@@ -1,4 +1,7 @@
-use crate::{config::{Config, Bootloader}, disks};
+use crate::{
+    config::{Bootloader, Config},
+    disks,
+};
 use anyhow::{anyhow, bail, Context, Result};
 use sha2::{Digest, Sha256};
 use std::{
@@ -249,12 +252,24 @@ fn preflight(c: &Config) -> Result<()> {
     }
     Ok(())
 }
-fn arch() -> Result<&'static str> {
-    match std::env::consts::ARCH {
-        "x86_64" => Ok("amd64"),
-        "aarch64" => Ok("arm64"),
-        other => bail!("Unsupported architecture: {other}"),
+pub fn arch() -> Result<&'static str> {
+    let out = Command::new("uname").arg("-m").output().context("Detect running Linux architecture")?;
+    if !out.status.success() { bail!("Cannot read live-system architecture from uname"); }
+    let actual = String::from_utf8(out.stdout)?;
+    let detected = match actual.trim() {
+        "x86_64" | "amd64" => "amd64",
+        "aarch64" | "arm64" => "arm64",
+        other => bail!("Unsupported live system architecture: {other}"),
+    };
+    let binary = match std::env::consts::ARCH {
+        "x86_64" => "amd64",
+        "aarch64" => "arm64",
+        other => bail!("Stagehand executable architecture is unsupported: {other}"),
+    };
+    if detected != binary {
+        bail!("Stagehand binary and Linux live system architectures differ; cross-architecture installs are not supported.");
     }
+    Ok(detected)
 }
 fn fetch_stage3(a: &str) -> Result<PathBuf> {
     let base = format!("{MIRROR}/releases/{a}/autobuilds/current-stage3-{a}-systemd");
@@ -321,10 +336,13 @@ fn parse_name(index: &str, a: &str) -> Result<String> {
 fn digest_for(document: &str, filename: &str) -> Result<String> {
     for line in document.lines() {
         let parts: Vec<_> = line.split_whitespace().collect();
-        if parts.len() >= 2 && parts[0].len() == 64
+        if parts.len() >= 2
+            && parts[0].len() == 64
             && parts[0].bytes().all(|c| c.is_ascii_hexdigit())
-            && (parts[1] == filename || parts[1] == format!("*{filename}")
-                || parts[1] == format!("./{filename}")) {
+            && (parts[1] == filename
+                || parts[1] == format!("*{filename}")
+                || parts[1] == format!("./{filename}"))
+        {
             return Ok(parts[0].to_ascii_lowercase());
         }
     }
@@ -346,16 +364,28 @@ fn sha256(path: &Path) -> Result<String> {
 fn install_bootloader(config: &Config) -> Result<()> {
     match config.bootloader {
         Bootloader::SystemdBoot => {
-            inside(&["/usr/bin/bootctl", "--esp-path=/boot", "install", "--no-variables"])?;
-            write("boot/loader/loader.conf", "default gentoo-*\ntimeout 3\neditor no\n")?;
+            inside(&[
+                "/usr/bin/bootctl",
+                "--esp-path=/boot",
+                "install",
+                "--no-variables",
+            ])?;
+            write(
+                "boot/loader/loader.conf",
+                "default gentoo-*\ntimeout 3\neditor no\n",
+            )?;
             let entries = Path::new(ROOT).join("boot/loader/entries");
             let ukis = Path::new(ROOT).join("boot/EFI/Linux");
             let has_entries = entries.is_dir()
-                && fs::read_dir(entries)?.any(|e| e.ok()
-                    .is_some_and(|f| f.path().extension().is_some_and(|x| x == "conf")));
+                && fs::read_dir(entries)?.any(|e| {
+                    e.ok()
+                        .is_some_and(|f| f.path().extension().is_some_and(|x| x == "conf"))
+                });
             let has_ukis = ukis.is_dir()
-                && fs::read_dir(ukis)?.any(|e| e.ok()
-                    .is_some_and(|f| f.path().extension().is_some_and(|x| x == "efi")));
+                && fs::read_dir(ukis)?.any(|e| {
+                    e.ok()
+                        .is_some_and(|f| f.path().extension().is_some_and(|x| x == "efi"))
+                });
             if !has_entries && !has_ukis {
                 bail!("No systemd-boot entry or UKI found. Inspect the kernel install logs before rebooting.");
             }
@@ -366,9 +396,14 @@ fn install_bootloader(config: &Config) -> Result<()> {
                 "aarch64" => "arm64-efi",
                 _ => bail!("Unsupported GRUB target architecture"),
             };
-            inside(&["/usr/sbin/grub-install", &format!("--target={target}"),
-                "--efi-directory=/boot", "--bootloader-id=Gentoo",
-                "--removable", "--no-nvram"])?;
+            inside(&[
+                "/usr/sbin/grub-install",
+                &format!("--target={target}"),
+                "--efi-directory=/boot",
+                "--bootloader-id=Gentoo",
+                "--removable",
+                "--no-nvram",
+            ])?;
             inside(&["/usr/sbin/grub-mkconfig", "-o", "/boot/grub/grub.cfg"])?;
             let grub = Path::new(ROOT).join("boot/grub/grub.cfg");
             if !grub.is_file() || fs::metadata(&grub)?.len() == 0 {
@@ -511,7 +546,9 @@ mod tests {
         let checksum = format!("{}  another.tar.xz", "a".repeat(64));
         assert!(digest_for(&checksum, "stage3-amd64-systemd.tar.xz").is_err());
         let correct = format!("{}  stage3-amd64-systemd.tar.xz", "a".repeat(64));
-        assert_eq!(digest_for(&correct, "stage3-amd64-systemd.tar.xz").unwrap(), "a".repeat(64));
+        assert_eq!(
+            digest_for(&correct, "stage3-amd64-systemd.tar.xz").unwrap(),
+            "a".repeat(64)
+        );
     }
-
 }

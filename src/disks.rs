@@ -18,7 +18,6 @@ impl DiskContents {
     }
 }
 
-
 #[derive(Clone, Debug)]
 pub struct Disk {
     pub path: String,
@@ -114,7 +113,9 @@ fn is_mounted(node: &Value) -> bool {
 fn assess_contents(node: &Value, signature_found: Option<bool>) -> DiskContents {
     if node["pttype"].as_str().is_some_and(|s| !s.is_empty())
         || node["fstype"].as_str().is_some_and(|s| !s.is_empty())
-        || node["children"].as_array().is_some_and(|children| !children.is_empty())
+        || node["children"]
+            .as_array()
+            .is_some_and(|children| !children.is_empty())
         || signature_found == Some(true)
     {
         DiskContents::ExistingLayout
@@ -130,8 +131,11 @@ fn assess_contents(node: &Value, signature_found: Option<bool>) -> DiskContents 
 fn disk_signatures(device: &str) -> Option<bool> {
     let output = Command::new("wipefs")
         .args(["--no-act", "--json", device])
-        .output().ok()?;
-    if !output.status.success() { return None; }
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
     let doc: Value = serde_json::from_slice(&output.stdout).ok()?;
     Some(!doc["signatures"].as_array()?.is_empty())
 }
@@ -139,13 +143,18 @@ fn disk_signatures(device: &str) -> Option<bool> {
 /// Recheck the chosen device immediately before any destructive operation.
 pub fn verify_target(selected: &Disk) -> Result<()> {
     let present = discover()?;
-    let current = present.iter().find(|disk| disk.path == selected.path && disk.bytes == selected.bytes)
+    let current = present
+        .iter()
+        .find(|disk| disk.path == selected.path && disk.bytes == selected.bytes)
         .context("Selected disk disappeared or changed size")?;
     if let Some(reason) = &current.block_reason {
         bail!("Cannot erase disk {}: {reason}", selected.path);
     }
     if current.contents != selected.contents {
-        bail!("Disk {} state changed. Refresh and reselect the disk.", selected.path);
+        bail!(
+            "Disk {} state changed. Refresh and reselect the disk.",
+            selected.path
+        );
     }
     let output = Command::new("swapon")
         .args(["--noheadings", "--raw", "--output", "NAME"])
@@ -181,7 +190,10 @@ mod tests {
     #[test]
     fn classify_existing_and_blank() {
         let blank = serde_json::json!({"pttype":null,"fstype":null});
-        assert_eq!(assess_contents(&blank, Some(false)), DiskContents::NoSignatures);
+        assert_eq!(
+            assess_contents(&blank, Some(false)),
+            DiskContents::NoSignatures
+        );
         assert_eq!(assess_contents(&blank, None), DiskContents::Unknown);
         let used = serde_json::json!({"pttype":"gpt","children":[{"type":"part"}]});
         assert_eq!(assess_contents(&used, None), DiskContents::ExistingLayout);
