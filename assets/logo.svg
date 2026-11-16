@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="780" height="240" viewBox="0 0 780 240" role="img" aria-label="Stagehand">
+  <rect width="780" height="240" rx="24" fill="#282828"/>
+  <rect x="38" y="45" width="145" height="145" rx="26" fill="#3c3836" stroke="#fabd2f" stroke-width="5"/>
+  <path d="M73 95l30 25-30 25M115 148h37" fill="none" stroke="#b8bb26" stroke-linecap="round" stroke-linejoin="round" stroke-width="10"/>
+  <text x="212" y="138" font-family="system-ui, sans-serif" font-size="75" font-weight="700" fill="#ebdbb2">Stagehand</text>
+  <text x="216" y="178" font-family="system-ui, sans-serif" font-size="23" fill="#a89984">Gentoo, one step at a time.</text>
+</svg>
