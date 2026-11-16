@@ -1,6 +1,7 @@
 use crate::{
     config::{
-        Bootloader, BuildJobs, Config, Editor, Filesystem, Kernel, Locale, Network, Stage3, SudoMode, Swap,
+        Bootloader, BuildJobs, Config, Editor, Filesystem, Kernel, Locale, Network, Stage3,
+        SudoMode, Swap,
     },
     disks::{self, Disk},
     install,
@@ -769,10 +770,16 @@ fn menu_value_color(app: &App, section: Option<Section>, index: usize) -> Color 
         (Some(Section::Users), 0) if app.config.username.is_empty() => AMBER,
         (Some(Section::Users), 1) if app.config.user_password.chars().count() < 8 => AMBER,
         (Some(Section::Users), 2) if app.config.root_password.chars().count() < 8 => AMBER,
-        (Some(Section::Network), 2) if !app.config.ssh_enabled
-            && app.config.ssh_public_key.is_empty() => MUTED,
-        (Some(Section::Network), 2) if app.config.ssh_enabled
-            && app.config.ssh_public_key.is_empty() => AMBER,
+        (Some(Section::Network), 2)
+            if !app.config.ssh_enabled && app.config.ssh_public_key.is_empty() =>
+        {
+            MUTED
+        }
+        (Some(Section::Network), 2)
+            if app.config.ssh_enabled && app.config.ssh_public_key.is_empty() =>
+        {
+            AMBER
+        }
         _ => AQUA,
     }
 }
@@ -901,53 +908,12 @@ fn render_menu(frame: &mut Frame, area: Rect, app: &App) {
         .collect();
     // Do not set a highlight foreground: it would overwrite the green
     // configured values (and amber missing-value warnings).
-    let list = List::new(items).block(panel(title)).highlight_style(
-        Style::default().bg(PANEL).add_modifier(Modifier::BOLD),
-    );
+    let list = List::new(items)
+        .block(panel(title))
+        .highlight_style(Style::default().bg(PANEL).add_modifier(Modifier::BOLD));
     let mut state = ListState::default().with_selected(Some(index));
     frame.render_stateful_widget(list, area, &mut state);
 }
-#[cfg(test)]
-mod menu_tests {
-    use super::*;
-
-    #[test]
-    fn completed_defaults_are_green_and_missing_values_amber() {
-        let mut app = App::new();
-        assert_eq!(menu_value_color(&app, None, 0), AMBER);
-        assert_eq!(menu_value_color(&app, None, 1), AQUA);
-        assert_eq!(menu_value_color(&app, None, 2), AQUA);
-        assert_eq!(menu_value_color(&app, None, 4), AMBER);
-        assert_eq!(menu_value_color(&app, None, 6), AQUA);
-        assert_eq!(menu_value_color(&app, Some(Section::Users), 3), AQUA);
-        assert_eq!(menu_value_color(&app, Some(Section::Network), 2), MUTED);
-        app.config.ssh_enabled = true;
-        assert_eq!(menu_value_color(&app, Some(Section::Network), 2), AMBER);
-        app.config.ssh_public_key = "ssh-ed25519 fake".into();
-        assert_eq!(menu_value_color(&app, Some(Section::Network), 2), AQUA);
-    }
-
-    #[test]
-    fn user_section_becomes_green_when_credentials_configured() {
-        let mut app = App::new();
-        app.config.username = "dan".into();
-        app.config.user_password = "long-password".into();
-        app.config.root_password = "another-long-password".into();
-        assert!(users_ready(&app.config));
-        assert_eq!(menu_value_color(&app, None, 4), AQUA);
-        app.config.root_password.clear();
-        assert!(!users_ready(&app.config));
-        assert_eq!(menu_value_color(&app, None, 4), AMBER);
-    }
-
-    #[test]
-    fn sudo_choice_has_three_options_and_belongs_to_users() {
-        assert_eq!(Choice::Sudo.count(), 3);
-        assert!(Choice::Sudo.section() == Section::Users);
-        assert_eq!(Section::Users.entries()[3], "Sudo access");
-    }
-}
-
 fn render_details(frame: &mut Frame, area: Rect, app: &App) {
     let text = match app.page {
         Page::Main => {
@@ -1111,7 +1077,11 @@ fn render_details(frame: &mut Frame, area: Rect, app: &App) {
                 Choice::Editor => ("Console editor", &["None", "nano (default)", "vim"]),
                 Choice::Sudo => (
                     "Sudo privileges",
-                    &["No sudo (user is not in wheel)", "Sudo with password (default)", "Sudo without password (NOPASSWD)"],
+                    &[
+                        "No sudo (user is not in wheel)",
+                        "Sudo with password (default)",
+                        "Sudo without password (NOPASSWD)",
+                    ],
                 ),
             };
             let options = options
@@ -1370,4 +1340,45 @@ fn log_tail(lines: usize) -> String {
         .rev()
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[cfg(test)]
+mod menu_tests {
+    use super::*;
+
+    #[test]
+    fn completed_defaults_are_green_and_missing_values_amber() {
+        let mut app = App::new();
+        assert_eq!(menu_value_color(&app, None, 0), AMBER);
+        assert_eq!(menu_value_color(&app, None, 1), AQUA);
+        assert_eq!(menu_value_color(&app, None, 2), AQUA);
+        assert_eq!(menu_value_color(&app, None, 4), AMBER);
+        assert_eq!(menu_value_color(&app, None, 6), AQUA);
+        assert_eq!(menu_value_color(&app, Some(Section::Users), 3), AQUA);
+        assert_eq!(menu_value_color(&app, Some(Section::Network), 2), MUTED);
+        app.config.ssh_enabled = true;
+        assert_eq!(menu_value_color(&app, Some(Section::Network), 2), AMBER);
+        app.config.ssh_public_key = "ssh-ed25519 fake".into();
+        assert_eq!(menu_value_color(&app, Some(Section::Network), 2), AQUA);
+    }
+
+    #[test]
+    fn user_section_becomes_green_when_credentials_configured() {
+        let mut app = App::new();
+        app.config.username = "dan".into();
+        app.config.user_password = "long-password".into();
+        app.config.root_password = "another-long-password".into();
+        assert!(users_ready(&app.config));
+        assert_eq!(menu_value_color(&app, None, 4), AQUA);
+        app.config.root_password.clear();
+        assert!(!users_ready(&app.config));
+        assert_eq!(menu_value_color(&app, None, 4), AMBER);
+    }
+
+    #[test]
+    fn sudo_choice_has_three_options_and_belongs_to_users() {
+        assert_eq!(Choice::Sudo.count(), 3);
+        assert!(Choice::Sudo.section() == Section::Users);
+        assert_eq!(Section::Users.entries()[3], "Sudo access");
+    }
 }

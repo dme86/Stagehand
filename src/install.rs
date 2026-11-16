@@ -353,11 +353,7 @@ fn install(c: &Config, report: &mut impl FnMut(usize, &str) -> Result<()>) -> Re
     inside_profiled(&["/usr/bin/emerge", "--noreplace", c.kernel.package()])?;
     verify_generated_initramfs(c.bootloader)?;
 
-    let mut packages = vec![
-        "/usr/bin/emerge",
-        "--noreplace",
-        "sys-apps/locale-gen",
-    ];
+    let mut packages = vec!["/usr/bin/emerge", "--noreplace", "sys-apps/locale-gen"];
     if c.sudo_mode.enabled() {
         packages.push("app-admin/sudo");
     }
