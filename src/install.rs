@@ -710,7 +710,9 @@ fn install_bootloader(config: &Config) -> Result<()> {
             let root_partition = disks::partition_path(&disk.path, root_number);
             let uuid = output("blkid", &["-s", "UUID", "-o", "value", &root_partition])?;
             let uuid = uuid.trim();
-            if uuid.is_empty() { bail!("Unable to read UUID of installed root partition"); }
+            if uuid.is_empty() {
+                bail!("Unable to read UUID of installed root partition");
+            }
             boot_verify::verify_grub_entries(Path::new(ROOT), config.filesystem, uuid)?;
             boot_verify::verify_efi_binary(Path::new(ROOT), arch()?, false)?;
         }

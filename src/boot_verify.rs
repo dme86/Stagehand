@@ -16,16 +16,22 @@ fn artifact(path: &Path) -> Result<()> {
     let meta = fs::symlink_metadata(path)
         .with_context(|| format!("Missing boot artifact {}", path.display()))?;
     if !meta.file_type().is_file() || meta.len() < MIN_BOOT_FILE_SIZE {
-        bail!("Boot artifact {} is not a regular file or is too small", path.display());
+        bail!(
+            "Boot artifact {} is not a regular file or is too small",
+            path.display()
+        );
     }
     Ok(())
 }
 
 fn on_esp(root: &Path, spec: &str) -> Result<()> {
-    let relative = spec.strip_prefix('/')
+    let relative = spec
+        .strip_prefix('/')
         .context("Boot paths must be absolute paths within the ESP")?;
     if relative.is_empty()
-        || !Path::new(relative).components().all(|p| matches!(p, Component::Normal(_)))
+        || !Path::new(relative)
+            .components()
+            .all(|p| matches!(p, Component::Normal(_)))
     {
         bail!("Invalid boot artifact path: {spec}");
     }
@@ -35,7 +41,8 @@ fn on_esp(root: &Path, spec: &str) -> Result<()> {
         current.push(component.as_os_str());
         if fs::symlink_metadata(&current)
             .with_context(|| format!("Boot entry refers to missing file {}", current.display()))?
-            .file_type().is_symlink()
+            .file_type()
+            .is_symlink()
         {
             bail!("Boot entry follows symlink {}", current.display());
         }
@@ -68,7 +75,10 @@ fn check_pe(path: &Path, arch: &str) -> Result<()> {
     }
     let actual = u16::from_le_bytes([pe[4], pe[5]]);
     if actual != machine {
-        bail!("EFI binary {} targets machine {actual:#06x}, not {machine:#06x}", path.display());
+        bail!(
+            "EFI binary {} targets machine {actual:#06x}, not {machine:#06x}",
+            path.display()
+        );
     }
     Ok(())
 }
@@ -89,20 +99,27 @@ pub fn verify_efi_binary(root: &Path, arch: &str, systemd: bool) -> Result<()> {
 }
 
 fn kernel_options(options: &str, filesystem: Filesystem, actual_uuid: Option<&str>) -> Result<()> {
-    let root_params: Vec<_> = options.split_whitespace()
-        .filter_map(|v| v.strip_prefix("root=")).collect();
+    let root_params: Vec<_> = options
+        .split_whitespace()
+        .filter_map(|v| v.strip_prefix("root="))
+        .collect();
     if root_params.len() != 1 {
         bail!("Boot entry requires exactly one root= argument");
     }
     let target = root_params[0];
     let is_label = target == "LABEL=ROOT";
-    let is_uuid = actual_uuid.is_some_and(|uuid| target
-        .strip_prefix("UUID=").is_some_and(|value| value.eq_ignore_ascii_case(uuid)));
+    let is_uuid = actual_uuid.is_some_and(|uuid| {
+        target
+            .strip_prefix("UUID=")
+            .is_some_and(|value| value.eq_ignore_ascii_case(uuid))
+    });
     if !is_label && !is_uuid {
         bail!("Boot root {target} does not identify the installed ROOT filesystem");
     }
-    let flags: Vec<_> = options.split_whitespace()
-        .filter_map(|v| v.strip_prefix("rootflags=")).collect();
+    let flags: Vec<_> = options
+        .split_whitespace()
+        .filter_map(|v| v.strip_prefix("rootflags="))
+        .collect();
     if filesystem == Filesystem::Btrfs {
         if flags != ["subvol=@"] {
             bail!("Btrfs boot entry requires rootflags=subvol=@");
@@ -138,7 +155,10 @@ pub fn verify_systemd_entries(root: &Path, filesystem: Filesystem) -> Result<()>
             continue;
         }
         if !fs::symlink_metadata(&path)?.file_type().is_file() {
-            bail!("Boot Loader Spec entry {} is not a regular file", path.display());
+            bail!(
+                "Boot Loader Spec entry {} is not a regular file",
+                path.display()
+            );
         }
         found += 1;
         let content = fs::read_to_string(&path)?;
@@ -146,7 +166,9 @@ pub fn verify_systemd_entries(root: &Path, filesystem: Filesystem) -> Result<()>
         let mut initrd = Vec::new();
         let mut options = Vec::new();
         for line in content.lines().map(str::trim) {
-            if line.starts_with('#') || line.is_empty() { continue; }
+            if line.starts_with('#') || line.is_empty() {
+                continue;
+            }
             let mut fields = line.split_whitespace();
             match fields.next() {
                 Some("linux") => linux.extend(fields),
@@ -159,7 +181,9 @@ pub fn verify_systemd_entries(root: &Path, filesystem: Filesystem) -> Result<()>
             bail!("Boot entry {name} must reference exactly one kernel, an initramfs and one options line");
         }
         on_esp(root, linux[0])?;
-        for path in initrd { on_esp(root, path)?; }
+        for path in initrd {
+            on_esp(root, path)?;
+        }
         if options[0].split_whitespace().collect::<Vec<_>>()
             != expected_cmdline.split_whitespace().collect::<Vec<_>>()
         {
@@ -187,19 +211,25 @@ pub fn verify_grub_entries(
     for line in config.lines() {
         let line = line.trim_start();
         if line.starts_with("menuentry ") {
-            if started { break; }
+            if started {
+                break;
+            }
             started = true;
         } else if started {
             let mut words = line.split_whitespace();
             match words.next() {
                 Some("linux" | "linuxefi") if linux.is_none() => {
-                    linux = Some((words.next().unwrap_or("").to_string(),
-                        words.collect::<Vec<_>>().join(" ")));
+                    linux = Some((
+                        words.next().unwrap_or("").to_string(),
+                        words.collect::<Vec<_>>().join(" "),
+                    ));
                 }
                 Some("initrd" | "initrdefi") => initrds.extend(words.map(str::to_string)),
                 _ => {}
             }
-            if line == "}" { break; }
+            if line == "}" {
+                break;
+            }
         }
     }
     let (kernel, opts) = linux.context("GRUB default menuentry has no Linux kernel line")?;
@@ -209,18 +239,25 @@ pub fn verify_grub_entries(
     on_esp(root, &kernel)?;
     // The default GRUB menuentry must actually refer to the initramfs of
     // its selected kernel, not merely any stale image on the ESP.
-    let kernel_name = Path::new(&kernel).file_name()
-        .and_then(|name| name.to_str()).context("GRUB kernel has an invalid filename")?;
-    let kernel_version = kernel_name.strip_prefix("vmlinuz-")
+    let kernel_name = Path::new(&kernel)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .context("GRUB kernel has an invalid filename")?;
+    let kernel_version = kernel_name
+        .strip_prefix("vmlinuz-")
         .or_else(|| kernel_name.strip_prefix("kernel-"))
         .context("Unrecognized installed GRUB kernel filename")?;
     let mut matching_initramfs = false;
     for initrd in initrds {
         on_esp(root, &initrd)?;
-        let initrd_name = Path::new(&initrd).file_name().and_then(|name| name.to_str())
+        let initrd_name = Path::new(&initrd)
+            .file_name()
+            .and_then(|name| name.to_str())
             .context("Invalid GRUB initramfs filename")?;
-        if initrd_name.strip_prefix("initramfs-")
-            .and_then(|name| name.strip_suffix(".img")) == Some(kernel_version)
+        if initrd_name
+            .strip_prefix("initramfs-")
+            .and_then(|name| name.strip_suffix(".img"))
+            == Some(kernel_version)
         {
             matching_initramfs = true;
         }
@@ -237,7 +274,10 @@ mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
     fn root() -> std::path::PathBuf {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let dir = std::env::temp_dir().join(format!("stagehand-efi-{}-{now}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         dir
@@ -274,16 +314,26 @@ mod tests {
         let root = root();
         write_file(&root, "etc/kernel/entry-token", b"gentoo\n");
         write_file(&root, "etc/kernel/install.conf", b"layout=bls\n");
-        write_file(&root, "etc/kernel/cmdline",
-            b"console=tty0 root=LABEL=ROOT rootfstype=btrfs rootflags=subvol=@ rw\n");
-        write_file(&root, "boot/loader/loader.conf", b"default gentoo-*\ntimeout 3\n");
+        write_file(
+            &root,
+            "etc/kernel/cmdline",
+            b"console=tty0 root=LABEL=ROOT rootfstype=btrfs rootflags=subvol=@ rw\n",
+        );
+        write_file(
+            &root,
+            "boot/loader/loader.conf",
+            b"default gentoo-*\ntimeout 3\n",
+        );
         write_file(&root, "boot/loader/entries/gentoo-6.12.conf",
             b"title Gentoo\nlinux /gentoo/6.12/linux\ninitrd /gentoo/6.12/initrd\noptions console=tty0 root=LABEL=ROOT rootfstype=btrfs rootflags=subvol=@ rw\n");
         write_file(&root, "boot/gentoo/6.12/linux", &vec![1; 8192]);
         write_file(&root, "boot/gentoo/6.12/initrd", &vec![1; 8192]);
         assert!(verify_systemd_entries(&root, Filesystem::Btrfs).is_ok());
-        write_file(&root, "boot/loader/entries/gentoo-6.12.conf",
-            b"linux /gentoo/6.12/linux\ninitrd /gentoo/6.12/initrd\noptions root=LABEL=LIVE rw\n");
+        write_file(
+            &root,
+            "boot/loader/entries/gentoo-6.12.conf",
+            b"linux /gentoo/6.12/linux\ninitrd /gentoo/6.12/initrd\noptions root=LABEL=LIVE rw\n",
+        );
         assert!(verify_systemd_entries(&root, Filesystem::Btrfs).is_err());
         write_file(&root, "boot/loader/entries/gentoo-6.12.conf",
             b"linux /gentoo/6.12/linux\ninitrd /../etc/shadow\noptions console=tty0 root=LABEL=ROOT rootfstype=btrfs rootflags=subvol=@ rw\n");
@@ -310,8 +360,17 @@ mod tests {
     }
     #[test]
     fn rejects_ambiguous_roots_and_wrong_filesystem_flags() {
-        assert!(kernel_options("root=LABEL=ROOT root=LABEL=LIVE rw", Filesystem::Ext4, None).is_err());
-        assert!(kernel_options("root=LABEL=ROOT rootflags=subvol=@", Filesystem::Ext4, None).is_err());
-        assert!(kernel_options("root=LABEL=ROOT rootflags=subvol=@", Filesystem::Btrfs, None).is_ok());
+        assert!(
+            kernel_options("root=LABEL=ROOT root=LABEL=LIVE rw", Filesystem::Ext4, None).is_err()
+        );
+        assert!(
+            kernel_options("root=LABEL=ROOT rootflags=subvol=@", Filesystem::Ext4, None).is_err()
+        );
+        assert!(kernel_options(
+            "root=LABEL=ROOT rootflags=subvol=@",
+            Filesystem::Btrfs,
+            None
+        )
+        .is_ok());
     }
 }
