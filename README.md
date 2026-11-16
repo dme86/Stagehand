@@ -10,7 +10,7 @@ A keyboard-first, guided **Gentoo Linux installer written in Rust**. Inspired by
 Stagehand lets you configure an installation in a clean terminal interface,
 review every decision, and install only after explicit confirmation.
 
-> **Early development (v0.5.0).** The installer has not yet passed an end-to-end
+> **Early development (v0.5.1).** The installer has not yet passed an end-to-end
 > UEFI VM boot test. **Do not run it against a disk containing valuable data.**
 > Use a disposable virtual machine until the installation and boot path are validated.
 
@@ -18,7 +18,7 @@ review every decision, and install only after explicit confirmation.
 
 ```text
 ┌ Welcome ────────────────────────────────────────────────────────────────┐
-│ STAGEHAND              Gentoo installer · v0.5.0 · AMD64 / x86_64       │
+│ STAGEHAND              Gentoo installer · v0.5.1 · AMD64 / x86_64       │
 ├ Installation settings ───┬ Details ─────────────────────────────────────┤
 │ › Storage                │ Welcome to Stagehand.                       │
 │     /dev/vda · Btrfs     │                                            │
@@ -247,7 +247,7 @@ test: use a disposable UEFI QEMU disk before trusting a new configuration.
 
 ## Gentoo Handbook coverage
 
-Stagehand v0.5.0 incorporates additional choices from the official
+Stagehand v0.5.1 incorporates additional choices from the official
 [Gentoo AMD64 Handbook](https://wiki.gentoo.org/wiki/Handbook:AMD64).
 Both AMD64 and ARM64 offer standard and desktop systemd Stage3 archives; desktop
 Stage3 includes extra development tools, **not a preinstalled graphical environment**.
@@ -271,6 +271,20 @@ profiles/USE flags, Legacy BIOS boot, detailed partitioning, Secure Boot and
 manual kernel compilation. Those need dedicated installation workflows and
 integration testing rather than exposing settings that Stagehand cannot reliably
 apply yet. **Rust CI validates code, not successful Gentoo boot.**
+
+## Installation sequence audit
+
+Stagehand's actual order of operations is documented in
+[docs/INSTALLATION_SEQUENCE.md](docs/INSTALLATION_SEQUENCE.md). The sequence
+is cross-checked against the official Gentoo AMD64 Handbook and the
+`gentoo-ansible/install.yml` reference: Stage3 and Portage configuration
+precede chroot, virtual filesystems and resolver are verified before emerging
+packages, `env-update` and `/etc/profile` are applied inside Gentoo, and
+`installkernel` is installed before the selected distribution kernel.
+
+GRUB's Btrfs root subvolume flags and an actual kernel boot entry are verified
+before Stagehand reports a successful installation. The tests validate the
+sequence non-destructively; a full bootable VM installation remains outstanding.
 
 ## Development
 

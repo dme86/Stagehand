@@ -154,23 +154,32 @@ fn install(c: &Config, report: &mut impl FnMut(usize, &str) -> Result<()>) -> Re
     exec("mount", &["--rbind", "/dev", &format!("{ROOT}/dev")])?;
     exec("mount", &["--make-rslave", &format!("{ROOT}/dev")])?;
     exec("mount", &["--bind", "/run", &format!("{ROOT}/run")])?;
+    // The Gentoo Handbook requires /proc, /sys, /dev and /run to be
+    // mounted before chroot. Check that they really are mountpoints.
+    verify_chroot_ready(&fs::read_to_string("/proc/self/mountinfo")?, c)?;
+
+    // env-update writes /etc/profile.env and regenerates ld.so.cache.
+    // A profiled shell reads it inside the chroot, not from the live ISO.
+    inside(&["/usr/sbin/env-update"])?;
 
     progress(report, 8, "Initialize Portage tree")?;
-    inside(&["/usr/bin/emerge-webrsync"])?;
+    inside_profiled(&["/usr/bin/emerge-webrsync"])?;
 
     progress(report, 9, "Install kernel, boot and essential packages")?;
+    // Keep the prerequisite transactions distinct and ordered.
+    for command in boot_prerequisite_commands(c) {
+        inside_profiled(&command)?;
+    }
     let mut packages = vec![
         "/usr/bin/emerge",
         "--noreplace",
-        "sys-kernel/installkernel",
         c.kernel.package(),
         "sys-kernel/linux-firmware",
-        "sys-fs/btrfs-progs",
         "app-admin/sudo",
         "sys-apps/locale-gen",
     ];
-    if c.bootloader == Bootloader::Grub {
-        packages.push("sys-boot/grub");
+    if c.filesystem == Filesystem::Btrfs {
+        packages.push("sys-fs/btrfs-progs");
     }
     if c.ssh_enabled {
         packages.push("net-misc/openssh");
@@ -184,8 +193,8 @@ fn install(c: &Config, report: &mut impl FnMut(usize, &str) -> Result<()>) -> Re
     if let Some(editor) = c.editor.package() {
         packages.push(editor);
     }
-    inside(&packages)?;
-    inside(&["/usr/bin/env", "locale-gen"])?;
+    inside_profiled(&packages)?;
+    inside_profiled(&["/usr/bin/env", "locale-gen"])?;
 
     progress(report, 10, "Create accounts and credentials")?;
     inside_secret(
@@ -260,6 +269,9 @@ fn install(c: &Config, report: &mut impl FnMut(usize, &str) -> Result<()>) -> Re
     let resolver = Path::new(ROOT).join("etc/resolv.conf");
     fs::remove_file(&resolver)?;
     symlink("../run/systemd/resolve/stub-resolv.conf", &resolver)?;
+    // The kernel has already been installed; now verify the ESP and produce
+    // the final bootloader configuration before syncing/unmounting.
+    validate_chroot_mounts(&fs::read_to_string("/proc/self/mountinfo")?, c.filesystem)?;
     install_bootloader(c)?;
 
     progress(report, 12, "Sync disks and safely unmount")?;
@@ -268,6 +280,34 @@ fn install(c: &Config, report: &mut impl FnMut(usize, &str) -> Result<()>) -> Re
     guard.0 = false;
     Ok(())
 }
+/// Required installation order: systemd[boot] (when selected), then
+/// installkernel configured for the selected loader, then the kernel itself.
+/// Keeping this pure makes the ordering testable without disk I/O.
+fn boot_prerequisite_commands(c: &Config) -> Vec<Vec<&'static str>> {
+    let mut commands = Vec::new();
+    if c.bootloader == Bootloader::SystemdBoot {
+        commands.push(vec![
+            "/usr/bin/emerge",
+            "--update",
+            "--newuse",
+            "--oneshot",
+            "sys-apps/systemd",
+        ]);
+    }
+    let mut installkernel = vec![
+        "/usr/bin/emerge",
+        "--update",
+        "--newuse",
+        "--oneshot",
+        "sys-kernel/installkernel",
+    ];
+    if c.bootloader == Bootloader::Grub {
+        installkernel.push("sys-boot/grub");
+    }
+    commands.push(installkernel);
+    commands
+}
+
 fn preflight(c: &Config) -> Result<()> {
     let uid = Command::new("id").arg("-u").output()?;
     if uid.stdout != b"0\n" {
@@ -462,6 +502,22 @@ fn ensure_sudoers_includes() -> Result<()> {
     Ok(())
 }
 
+/// GRUB must actually reference a Linux kernel, not just exist as a file.
+/// Btrfs @ must be included so Linux boots the right root subvolume.
+fn validate_grub_config(document: &str, filesystem: Filesystem) -> Result<()> {
+    let has_kernel = document.lines().any(|line| {
+        let line = line.trim_start();
+        line.starts_with("linux ") || line.starts_with("linuxefi ")
+    });
+    if !has_kernel {
+        bail!("GRUB configuration contains no Linux kernel entry.");
+    }
+    if filesystem == Filesystem::Btrfs && !document.contains("rootflags=subvol=@") {
+        bail!("GRUB configuration lacks Btrfs rootflags=subvol=@.");
+    }
+    Ok(())
+}
+
 fn install_bootloader(config: &Config) -> Result<()> {
     match config.bootloader {
         Bootloader::SystemdBoot => {
@@ -492,6 +548,16 @@ fn install_bootloader(config: &Config) -> Result<()> {
             }
         }
         Bootloader::Grub => {
+            // GRUB doesn't consume /etc/kernel/cmdline. The root subvolume
+            // must be included in its own generated kernel command line.
+            if config.filesystem == Filesystem::Btrfs {
+                let path = Path::new(ROOT).join("etc/default/grub");
+                if !path.is_file() {
+                    bail!("GRUB defaults missing after package installation");
+                }
+                OpenOptions::new().append(true).open(&path)?
+                    .write_all(b"\n# Stagehand: Btrfs root subvolume\nGRUB_CMDLINE_LINUX=\"rootflags=subvol=@\"\n")?;
+            }
             let target = match std::env::consts::ARCH {
                 "x86_64" => "x86_64-efi",
                 "aarch64" => "arm64-efi",
@@ -510,6 +576,7 @@ fn install_bootloader(config: &Config) -> Result<()> {
             if !grub.is_file() || fs::metadata(&grub)?.len() == 0 {
                 bail!("GRUB failed to produce a usable configuration.");
             }
+            validate_grub_config(&fs::read_to_string(&grub)?, config.filesystem)?;
         }
     }
     Ok(())
@@ -583,7 +650,7 @@ fn configure(c: &Config) -> Result<()> {
         Bootloader::SystemdBoot => {
             "sys-apps/systemd boot\nsys-kernel/installkernel systemd systemd-boot dracut -grub\n"
         }
-        Bootloader::Grub => "sys-kernel/installkernel dracut grub -systemd-boot\n",
+        Bootloader::Grub => "sys-kernel/installkernel dracut grub -systemd -systemd-boot\n",
     };
     write("etc/portage/package.use/stagehand", boot_use)?;
     write(
@@ -601,6 +668,10 @@ fn configure(c: &Config) -> Result<()> {
     if let Some(opts) = c.build_jobs.makeopts() {
         conf.write_all(format!("MAKEOPTS=\"{opts}\"\n").as_bytes())?;
     }
+    if c.bootloader == Bootloader::Grub && arch()? == "amd64" {
+        // Handbook: UEFI GRUB on amd64 must be built with EFI support.
+        conf.write_all(b"GRUB_PLATFORMS=\"efi-64\"\n")?;
+    }
     fs::create_dir_all(format!("{ROOT}/var/log/portage"))?;
     let resolver = Path::new(ROOT).join("etc/resolv.conf");
     if resolver.exists() || resolver.is_symlink() {
@@ -614,26 +685,106 @@ fn write(path: &str, text: &str) -> Result<()> {
     fs::create_dir_all(file.parent().context("Missing parent directory")?)?;
     fs::write(file, text).with_context(|| format!("Write {path}"))
 }
+/// Require all chroot pseudo-filesystems to be mounted before executing
+/// Portage commands, and check ESP + Btrfs home mount placement too.
+fn validate_chroot_mounts(mountinfo: &str, filesystem: Filesystem) -> Result<()> {
+    let mut required = vec![
+        ROOT.to_string(),
+        format!("{ROOT}/boot"),
+        format!("{ROOT}/proc"),
+        format!("{ROOT}/sys"),
+        format!("{ROOT}/dev"),
+        format!("{ROOT}/run"),
+    ];
+    if filesystem == Filesystem::Btrfs {
+        required.push(format!("{ROOT}/home"));
+    }
+    for mount in required {
+        let present = mountinfo.lines().any(|line| {
+            // /proc/self/mountinfo: mountpoint is field #5 (zero-based 4).
+            line.split_whitespace().nth(4) == Some(mount.as_str())
+        });
+        if !present {
+            bail!("Required installation mountpoint {mount} is not mounted. Refusing to enter chroot.");
+        }
+    }
+    Ok(())
+}
+fn verify_chroot_ready(mountinfo: &str, config: &Config) -> Result<()> {
+    for file in [
+        "etc/gentoo-release",
+        "etc/portage/make.conf",
+        "etc/fstab",
+        "etc/resolv.conf",
+    ] {
+        let path = Path::new(ROOT).join(file);
+        if !path.is_file() {
+            bail!(
+                "Missing staged Gentoo configuration {}. Refusing to chroot.",
+                path.display()
+            );
+        }
+    }
+    validate_chroot_mounts(mountinfo, config.filesystem)
+}
+
+/// Direct argv only: shell expansion is not used for user-provided values.
+/// Clear any Portage or ROOT environment from the live ISO.
+fn chroot_command(args: &[&str]) -> Command {
+    let mut cmd = Command::new("chroot");
+    cmd.arg(ROOT)
+        .args(args)
+        .env_clear()
+        .env("HOME", "/root")
+        .env(
+            "PATH",
+            "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        )
+        .env("LANG", "C.UTF-8")
+        .env("LC_ALL", "C.UTF-8")
+        .env("TERM", "dumb");
+    cmd
+}
+/// Explicitly load /etc/profile *inside* Gentoo after env-update, as
+/// documented by the Handbook; "$@" passes argv without shell injection.
+fn inside_profiled(args: &[&str]) -> Result<()> {
+    let mut argv = vec![
+        "/bin/bash",
+        "-lc",
+        "source /etc/profile && exec \"$@\"",
+        "stagehand",
+    ];
+    argv.extend_from_slice(args);
+    inside(&argv)
+}
 fn inside(args: &[&str]) -> Result<()> {
-    let mut all = vec![ROOT];
-    all.extend_from_slice(args);
-    exec("chroot", &all)
+    let mut log = OpenOptions::new().append(true).create(true).open(LOG)?;
+    writeln!(log, "> chroot {} {}", ROOT, args.join(" "))?;
+    let status = chroot_command(args)
+        .stdout(Stdio::from(log.try_clone()?))
+        .stderr(Stdio::from(log))
+        .status()
+        .context("Execute Gentoo chroot command")?;
+    if !status.success() {
+        bail!("Chroot command failed ({status}); inspect {LOG}");
+    }
+    Ok(())
 }
 fn inside_secret(args: &[&str], secret: &[u8]) -> Result<()> {
     let mut log = OpenOptions::new().append(true).create(true).open(LOG)?;
     writeln!(log, "> chroot [stdin redacted] {}", args.join(" "))?;
-    let mut p = Command::new("chroot")
-        .arg(ROOT)
-        .args(args)
+    let mut child = chroot_command(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::from(log.try_clone()?))
         .stderr(Stdio::from(log))
-        .spawn()?;
-    p.stdin
+        .spawn()
+        .context("Start credential setup in Gentoo chroot")?;
+    child
+        .stdin
         .take()
         .context("Could not pipe credentials")?
         .write_all(secret)?;
-    if !p.wait()?.success() {
+    if !child.wait()?.success() {
         bail!("Credential setup failed. See {LOG}");
     }
     Ok(())
@@ -719,5 +870,83 @@ mod tests {
             digest_for(&correct, "stage3-amd64-systemd.tar.xz").unwrap(),
             "a".repeat(64)
         );
+    }
+    #[test]
+    fn kernel_bootstrap_is_explicitly_ordered() {
+        let mut c = Config::default();
+        let systemd = boot_prerequisite_commands(&c);
+        assert_eq!(systemd.len(), 2);
+        assert_eq!(systemd[0].last(), Some(&"sys-apps/systemd"));
+        assert_eq!(systemd[1].last(), Some(&"sys-kernel/installkernel"));
+        assert!(systemd.iter().all(|argv| argv.contains(&"--newuse")));
+        c.bootloader = Bootloader::Grub;
+        let grub = boot_prerequisite_commands(&c);
+        assert_eq!(grub.len(), 1);
+        assert!(grub[0].contains(&"sys-kernel/installkernel"));
+        assert_eq!(grub[0].last(), Some(&"sys-boot/grub"));
+    }
+    #[test]
+    fn handbook_installation_phase_order() {
+        assert_eq!(PHASES.len(), STEP_COUNT);
+        let position = |description: &str| {
+            PHASES
+                .iter()
+                .position(|phase| phase.contains(description))
+                .unwrap()
+        };
+        assert!(position("Fetch and verify") < position("Partition selected disk"));
+        assert!(position("Partition selected disk") < position("Extract systemd stage3"));
+        assert!(position("Extract systemd stage3") < position("Configure filesystem"));
+        assert!(position("Configure filesystem") < position("Prepare Gentoo chroot"));
+        assert!(position("Prepare Gentoo chroot") < position("Initialize Portage"));
+        assert!(position("Initialize Portage") < position("Install kernel"));
+        assert!(position("Install kernel") < position("Enable services"));
+        assert!(position("Enable services") < position("Sync disks"));
+    }
+    #[test]
+    fn chroot_requires_every_mountpoint() {
+        let paths = [
+            ROOT.to_string(),
+            format!("{ROOT}/boot"),
+            format!("{ROOT}/home"),
+            format!("{ROOT}/proc"),
+            format!("{ROOT}/sys"),
+            format!("{ROOT}/dev"),
+            format!("{ROOT}/run"),
+        ];
+        let mountinfo = paths
+            .iter()
+            .enumerate()
+            .map(|(id, path)| {
+                format!(
+                    "{} 1 0:12 / {path} rw,relatime - ext4 /dev/vda2 rw\n",
+                    id + 11
+                )
+            })
+            .collect::<String>();
+        assert!(validate_chroot_mounts(&mountinfo, Filesystem::Btrfs).is_ok());
+        let missing_boot = mountinfo
+            .lines()
+            .filter(|line| !line.contains(&format!("{ROOT}/boot ")))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(validate_chroot_mounts(&missing_boot, Filesystem::Btrfs).is_err());
+        let missing_home = mountinfo
+            .lines()
+            .filter(|line| !line.contains(&format!("{ROOT}/home ")))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(validate_chroot_mounts(&missing_home, Filesystem::Ext4).is_ok());
+        assert!(validate_chroot_mounts(&missing_home, Filesystem::Btrfs).is_err());
+    }
+    #[test]
+    fn grub_must_have_kernel_and_btrfs_subvolume() {
+        assert!(validate_grub_config("# only comments", Filesystem::Ext4).is_err());
+        let kernel = "menuentry Gentoo {\n linux /vmlinuz root=LABEL=ROOT rw\n}\n";
+        assert!(validate_grub_config(kernel, Filesystem::Ext4).is_ok());
+        assert!(validate_grub_config(kernel, Filesystem::Btrfs).is_err());
+        let btrfs =
+            "menuentry Gentoo {\n linux /vmlinuz root=LABEL=ROOT rootflags=subvol=@ rw\n}\n";
+        assert!(validate_grub_config(btrfs, Filesystem::Btrfs).is_ok());
     }
 }
