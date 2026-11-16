@@ -13,14 +13,7 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt
-      - name: Save formatted Rust files for review
-        run: |
-          for file in src/*.rs; do
-            echo "STAGEHAND_FMT_START:$file"
-            cat "$file"
-            echo "STAGEHAND_FMT_END:$file"
-          done
+      - run: cargo fmt --check
       - run: cargo test
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo build --release

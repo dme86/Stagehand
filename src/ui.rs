@@ -1,5 +1,5 @@
 use crate::{
-    config::{Bootloader, Config, Kernel, Filesystem, Swap, Locale},
+    config::{Bootloader, Config, Filesystem, Kernel, Locale, Swap},
     disks::{self, Disk},
     install::{self, Event},
 };
@@ -113,7 +113,10 @@ impl Choice {
         }
     }
     fn count(self) -> usize {
-        match self { Self::Locale => 3, _ => 2 }
+        match self {
+            Self::Locale => 3,
+            _ => 2,
+        }
     }
 }
 #[derive(Clone, Copy)]
@@ -360,21 +363,41 @@ impl App {
                 }
                 KeyCode::Enter | KeyCode::Right => {
                     match choice {
-                        Choice::Kernel => self.config.kernel = if self.choice_index == 0 {
-                            Kernel::Binary
-                        } else { Kernel::Source },
-                        Choice::Bootloader => self.config.bootloader = if self.choice_index == 0 {
-                            Bootloader::SystemdBoot
-                        } else { Bootloader::Grub },
-                        Choice::Filesystem => self.config.filesystem = if self.choice_index == 0 {
-                            Filesystem::Btrfs
-                        } else { Filesystem::Ext4 },
-                        Choice::Swap => self.config.swap = if self.choice_index == 0 {
-                            Swap::None
-                        } else { Swap::FourGiB },
-                        Choice::Locale => self.config.locale = match self.choice_index {
-                            0 => Locale::English, 1 => Locale::German, _ => Locale::Utf8,
-                        },
+                        Choice::Kernel => {
+                            self.config.kernel = if self.choice_index == 0 {
+                                Kernel::Binary
+                            } else {
+                                Kernel::Source
+                            }
+                        }
+                        Choice::Bootloader => {
+                            self.config.bootloader = if self.choice_index == 0 {
+                                Bootloader::SystemdBoot
+                            } else {
+                                Bootloader::Grub
+                            }
+                        }
+                        Choice::Filesystem => {
+                            self.config.filesystem = if self.choice_index == 0 {
+                                Filesystem::Btrfs
+                            } else {
+                                Filesystem::Ext4
+                            }
+                        }
+                        Choice::Swap => {
+                            self.config.swap = if self.choice_index == 0 {
+                                Swap::None
+                            } else {
+                                Swap::FourGiB
+                            }
+                        }
+                        Choice::Locale => {
+                            self.config.locale = match self.choice_index {
+                                0 => Locale::English,
+                                1 => Locale::German,
+                                _ => Locale::Utf8,
+                            }
+                        }
                     }
                     self.page = Page::Section(choice.section());
                     self.error.clear();
@@ -592,7 +615,8 @@ fn section_value(app: &App, section: Section, index: usize) -> String {
             "Prefer binary packages"
         } else {
             "Compile from source"
-        }.into(),
+        }
+        .into(),
         _ => String::new(),
     }
 }
@@ -652,9 +676,15 @@ fn render_menu(frame: &mut Frame, area: Rect, app: &App) {
                             app.config.username.clone()
                         },
                     ),
-                    ("Portage".into(),
-                        if app.config.binary_packages { "Binary packages preferred" }
-                        else { "Source builds" }.into()),
+                    (
+                        "Portage".into(),
+                        if app.config.binary_packages {
+                            "Binary packages preferred"
+                        } else {
+                            "Source builds"
+                        }
+                        .into(),
+                    ),
                     ("Install Gentoo".into(), "Review & install".into()),
                 ],
                 app.main_index,
@@ -789,15 +819,39 @@ fn render_details(frame: &mut Frame, area: Rect, app: &App) {
         }
         Page::Pick(choice) => {
             let (title, options): (&str, &[&str]) = match choice {
-                Choice::Kernel => ("Kernel", &["gentoo-kernel-bin (default)", "gentoo-kernel (build from source)"]),
+                Choice::Kernel => (
+                    "Kernel",
+                    &[
+                        "gentoo-kernel-bin (default)",
+                        "gentoo-kernel (build from source)",
+                    ],
+                ),
                 Choice::Bootloader => ("UEFI bootloader", &["systemd-boot (default)", "GRUB"]),
-                Choice::Filesystem => ("Root filesystem", &["Btrfs (zstd, @ / @home)", "ext4 (single root)"]),
-                Choice::Swap => ("Swap configuration", &["No swap (default)", "4 GiB swap partition"]),
-                Choice::Locale => ("System locale", &["en_US.UTF-8 (default)", "de_DE.UTF-8", "C.UTF-8"]),
+                Choice::Filesystem => (
+                    "Root filesystem",
+                    &["Btrfs (zstd, @ / @home)", "ext4 (single root)"],
+                ),
+                Choice::Swap => (
+                    "Swap configuration",
+                    &["No swap (default)", "4 GiB swap partition"],
+                ),
+                Choice::Locale => (
+                    "System locale",
+                    &["en_US.UTF-8 (default)", "de_DE.UTF-8", "C.UTF-8"],
+                ),
             };
-            let options = options.iter().enumerate().map(|(i, value)| {
-                format!("{}  {}", if i == app.choice_index { "›" } else { " " }, value)
-            }).collect::<Vec<_>>().join("\n\n");
+            let options = options
+                .iter()
+                .enumerate()
+                .map(|(i, value)| {
+                    format!(
+                        "{}  {}",
+                        if i == app.choice_index { "›" } else { " " },
+                        value
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n");
             format!("{title}\n\n{options}\n\nUse arrows and Enter to choose.")
         }
         Page::Edit(field) => {
@@ -855,9 +909,17 @@ fn render_details(frame: &mut Frame, area: Rect, app: &App) {
                 app.config.timezone,
                 app.config.locale.label(),
                 app.config.keymap,
-                if app.config.binary_packages { "Binary preferred" } else { "Source builds" },
+                if app.config.binary_packages {
+                    "Binary preferred"
+                } else {
+                    "Source builds"
+                },
                 app.config.username,
-                if app.config.ssh_enabled { "Key-only" } else { "Disabled" },
+                if app.config.ssh_enabled {
+                    "Key-only"
+                } else {
+                    "Disabled"
+                },
                 app.buffer
             )
         }

@@ -230,15 +230,17 @@ mod tests {
 
     #[test]
     fn swap_requires_sufficient_disk_size() {
-        let mut c = Config::default();
-        c.disk = Some(crate::disks::Disk {
-            path: "/dev/vda".to_owned(),
-            bytes: 8 * 1_073_741_824,
-            model: "Test".to_owned(),
-            contents: crate::disks::DiskContents::NoSignatures,
-            block_reason: None,
-        });
-        c.swap = Swap::FourGiB;
+        let c = Config {
+            disk: Some(crate::disks::Disk {
+                path: "/dev/vda".to_owned(),
+                bytes: 8 * 1_073_741_824,
+                model: "Test".to_owned(),
+                contents: crate::disks::DiskContents::NoSignatures,
+                block_reason: None,
+            }),
+            swap: Swap::FourGiB,
+            ..Config::default()
+        };
         assert!(c.validate().unwrap_err().contains("16 GiB"));
     }
 

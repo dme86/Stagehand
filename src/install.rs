@@ -1,5 +1,5 @@
 use crate::{
-    config::{Bootloader, Config, Filesystem, Swap, Locale},
+    config::{Bootloader, Config, Filesystem, Locale, Swap},
     disks,
 };
 use anyhow::{anyhow, bail, Context, Result};
@@ -48,16 +48,22 @@ fn install(c: &Config, tx: &Sender<Event>) -> Result<()> {
     disks::verify_target(selected)?;
     let disk = selected.path.as_str();
     let mut plan = vec![
-        "-s", disk, "mklabel", "gpt",
-        "mkpart", "ESP", "fat32", "1MiB", "513MiB",
-        "set", "1", "esp", "on",
+        "-s", disk, "mklabel", "gpt", "mkpart", "ESP", "fat32", "1MiB", "513MiB", "set", "1",
+        "esp", "on",
     ];
     if c.swap == Swap::FourGiB {
         plan.extend_from_slice(&["mkpart", "SWAP", "linux-swap", "513MiB", "4609MiB"]);
     }
     let root_number = if c.swap == Swap::FourGiB { 3 } else { 2 };
-    let root_start = if c.swap == Swap::FourGiB { "4609MiB" } else { "513MiB" };
-    let kind = match c.filesystem { Filesystem::Btrfs => "btrfs", Filesystem::Ext4 => "ext4" };
+    let root_start = if c.swap == Swap::FourGiB {
+        "4609MiB"
+    } else {
+        "513MiB"
+    };
+    let kind = match c.filesystem {
+        Filesystem::Btrfs => "btrfs",
+        Filesystem::Ext4 => "ext4",
+    };
     plan.extend_from_slice(&["mkpart", "ROOT", kind, root_start, "100%"]);
     exec("parted", &plan)?;
     exec("udevadm", &["settle"])?;
@@ -67,7 +73,9 @@ fn install(c: &Config, tx: &Sender<Event>) -> Result<()> {
 
     progress(tx, 4, "Format and mount selected filesystem");
     exec("mkfs.vfat", &["-F", "32", "-n", "EFI", &esp])?;
-    if let Some(device) = &swap_device { exec("mkswap", &["-L", "SWAP", device])?; }
+    if let Some(device) = &swap_device {
+        exec("mkswap", &["-L", "SWAP", device])?;
+    }
     fs::create_dir_all(ROOT)?;
     let mut guard = MountGuard(false);
     match c.filesystem {
@@ -79,11 +87,26 @@ fn install(c: &Config, tx: &Sender<Event>) -> Result<()> {
             exec("btrfs", &["subvolume", "create", &format!("{ROOT}/@home")])?;
             exec("umount", &[ROOT])?;
             guard.0 = false;
-            exec("mount", &["-o", "noatime,compress=zstd,space_cache=v2,subvol=@", &root, ROOT])?;
+            exec(
+                "mount",
+                &[
+                    "-o",
+                    "noatime,compress=zstd,space_cache=v2,subvol=@",
+                    &root,
+                    ROOT,
+                ],
+            )?;
             guard.0 = true;
             fs::create_dir_all(format!("{ROOT}/home"))?;
-            exec("mount", &["-o", "noatime,compress=zstd,space_cache=v2,subvol=@home",
-                &root, &format!("{ROOT}/home")])?;
+            exec(
+                "mount",
+                &[
+                    "-o",
+                    "noatime,compress=zstd,space_cache=v2,subvol=@home",
+                    &root,
+                    &format!("{ROOT}/home"),
+                ],
+            )?;
         }
         Filesystem::Ext4 => {
             exec("mkfs.ext4", &["-F", "-L", "ROOT", &root])?;
@@ -243,8 +266,12 @@ fn preflight(c: &Config) -> Result<()> {
         "curl",
         "sync",
     ] {
-        if command == "mkfs.btrfs" && c.filesystem == Filesystem::Ext4 { continue; }
-        if command == "btrfs" && c.filesystem == Filesystem::Ext4 { continue; }
+        if command == "mkfs.btrfs" && c.filesystem == Filesystem::Ext4 {
+            continue;
+        }
+        if command == "btrfs" && c.filesystem == Filesystem::Ext4 {
+            continue;
+        }
         if !Command::new("sh")
             .args(["-c", "command -v \"$1\" >/dev/null", "sh", command])
             .status()?
@@ -253,8 +280,12 @@ fn preflight(c: &Config) -> Result<()> {
             bail!("Missing live-system dependency: {command}");
         }
     }
-    if c.filesystem == Filesystem::Ext4 { ensure_live_tool("mkfs.ext4")?; }
-    if c.swap == Swap::FourGiB { ensure_live_tool("mkswap")?; }
+    if c.filesystem == Filesystem::Ext4 {
+        ensure_live_tool("mkfs.ext4")?;
+    }
+    if c.swap == Swap::FourGiB {
+        ensure_live_tool("mkswap")?;
+    }
     disks::verify_target(c.disk.as_ref().context("Select a disk")?)?;
     if Path::new(ROOT).exists() && fs::read_dir(ROOT)?.next().is_some() {
         bail!("{ROOT} is not empty. Resolve old mounts first.");
@@ -262,8 +293,11 @@ fn preflight(c: &Config) -> Result<()> {
     Ok(())
 }
 fn ensure_live_tool(name: &str) -> Result<()> {
-    if !Command::new("sh").args(["-c", "command -v \"$1\" >/dev/null 2>&1", "sh", name])
-        .status()?.success() {
+    if !Command::new("sh")
+        .args(["-c", "command -v \"$1\" >/dev/null 2>&1", "sh", name])
+        .status()?
+        .success()
+    {
         bail!("Missing live-system dependency: {name}");
     }
     Ok(())
@@ -387,10 +421,15 @@ fn ensure_sudoers_includes() -> Result<()> {
     let path = Path::new(ROOT).join("etc/sudoers");
     let current = fs::read_to_string(&path).context("Read installed sudoers")?;
     let has_include = current.lines().any(|line| {
-        matches!(line.trim(), "@includedir /etc/sudoers.d" | "#includedir /etc/sudoers.d")
+        matches!(
+            line.trim(),
+            "@includedir /etc/sudoers.d" | "#includedir /etc/sudoers.d"
+        )
     });
     if !has_include {
-        OpenOptions::new().append(true).open(&path)?
+        OpenOptions::new()
+            .append(true)
+            .open(&path)?
             .write_all(b"\n@includedir /etc/sudoers.d\n")?;
     }
     Ok(())
@@ -453,8 +492,11 @@ fn configure(c: &Config) -> Result<()> {
     let mut fstab = String::from("# Managed by Stagehand\n");
     let cmdline = match c.filesystem {
         Filesystem::Btrfs => {
-            fstab.push_str("LABEL=ROOT / btrfs noatime,compress=zstd,space_cache=v2,subvol=@ 0 0\n");
-            fstab.push_str("LABEL=ROOT /home btrfs noatime,compress=zstd,space_cache=v2,subvol=@home 0 0\n");
+            fstab
+                .push_str("LABEL=ROOT / btrfs noatime,compress=zstd,space_cache=v2,subvol=@ 0 0\n");
+            fstab.push_str(
+                "LABEL=ROOT /home btrfs noatime,compress=zstd,space_cache=v2,subvol=@home 0 0\n",
+            );
             "console=tty0 root=LABEL=ROOT rootfstype=btrfs rootflags=subvol=@ rw\n"
         }
         Filesystem::Ext4 => {
@@ -463,19 +505,34 @@ fn configure(c: &Config) -> Result<()> {
         }
     };
     fstab.push_str("LABEL=EFI /boot vfat defaults,noatime 0 2\n");
-    if c.swap == Swap::FourGiB { fstab.push_str("LABEL=SWAP none swap sw 0 0\n"); }
+    if c.swap == Swap::FourGiB {
+        fstab.push_str("LABEL=SWAP none swap sw 0 0\n");
+    }
     write("etc/fstab", &fstab)?;
     write("etc/kernel/cmdline", cmdline)?;
     write("etc/hostname", &format!("{}\n", c.hostname))?;
-    write("etc/hosts", &format!("127.0.0.1 localhost {}\n::1 localhost {}\n", c.hostname, c.hostname))?;
+    write(
+        "etc/hosts",
+        &format!(
+            "127.0.0.1 localhost {}\n::1 localhost {}\n",
+            c.hostname, c.hostname
+        ),
+    )?;
     let zone = Path::new(ROOT).join("usr/share/zoneinfo").join(&c.timezone);
-    if !zone.is_file() { bail!("Invalid or unavailable timezone {}", c.timezone); }
+    if !zone.is_file() {
+        bail!("Invalid or unavailable timezone {}", c.timezone);
+    }
     let localtime = Path::new(ROOT).join("etc/localtime");
-    if localtime.exists() || localtime.is_symlink() { fs::remove_file(&localtime)?; }
+    if localtime.exists() || localtime.is_symlink() {
+        fs::remove_file(&localtime)?;
+    }
     symlink(format!("/usr/share/zoneinfo/{}", c.timezone), &localtime)?;
     write("etc/vconsole.conf", &format!("KEYMAP={}\n", c.keymap))?;
     write("etc/locale.conf", &format!("LANG={}\n", c.locale.label()))?;
-    write("etc/env.d/02locale", &format!("LANG=\"{}\"\n", c.locale.label()))?;
+    write(
+        "etc/env.d/02locale",
+        &format!("LANG=\"{}\"\n", c.locale.label()),
+    )?;
     let locale_gen = match c.locale {
         Locale::English | Locale::Utf8 => "en_US.UTF-8 UTF-8\n",
         Locale::German => "en_US.UTF-8 UTF-8\nde_DE.UTF-8 UTF-8\n",
@@ -483,17 +540,21 @@ fn configure(c: &Config) -> Result<()> {
     write("etc/locale.gen", locale_gen)?;
     // Do not copy the temporary live ISO machine identity into the new system.
     write("etc/machine-id", "")?;
-    write("etc/systemd/network/20-wired.network",
-        "[Match]\nName=en* eth*\n\n[Network]\nDHCP=yes\n")?;
+    write(
+        "etc/systemd/network/20-wired.network",
+        "[Match]\nName=en* eth*\n\n[Network]\nDHCP=yes\n",
+    )?;
     let boot_use = match c.bootloader {
-        Bootloader::SystemdBoot =>
-            "sys-apps/systemd boot\nsys-kernel/installkernel systemd systemd-boot dracut -grub\n",
-        Bootloader::Grub =>
-            "sys-kernel/installkernel dracut grub -systemd-boot\n",
+        Bootloader::SystemdBoot => {
+            "sys-apps/systemd boot\nsys-kernel/installkernel systemd systemd-boot dracut -grub\n"
+        }
+        Bootloader::Grub => "sys-kernel/installkernel dracut grub -systemd-boot\n",
     };
     write("etc/portage/package.use/stagehand", boot_use)?;
-    write("etc/portage/package.license/stagehand",
-        "sys-kernel/linux-firmware linux-fw-redistributable\n")?;
+    write(
+        "etc/portage/package.license/stagehand",
+        "sys-kernel/linux-firmware linux-fw-redistributable\n",
+    )?;
     let make = format!("{ROOT}/etc/portage/make.conf");
     let mut conf = OpenOptions::new().append(true).open(&make)?;
     // Preserve stage3 CHOST, USE flags, selected Gentoo profile and binhost.
@@ -504,7 +565,9 @@ fn configure(c: &Config) -> Result<()> {
     }
     fs::create_dir_all(format!("{ROOT}/var/log/portage"))?;
     let resolver = Path::new(ROOT).join("etc/resolv.conf");
-    if resolver.exists() || resolver.is_symlink() { fs::remove_file(&resolver)?; }
+    if resolver.exists() || resolver.is_symlink() {
+        fs::remove_file(&resolver)?;
+    }
     fs::copy("/etc/resolv.conf", resolver)?;
     Ok(())
 }
