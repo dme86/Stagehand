@@ -154,6 +154,35 @@ impl Bootloader {
     }
 }
 
+/// Controls whether the installed user belongs to wheel and whether
+/// Stagehand installs sudo / configures its policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum SudoMode {
+    Disabled,
+    #[default]
+    Password,
+    Passwordless,
+}
+impl SudoMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Disabled => "No sudo",
+            Self::Password => "Sudo (password required)",
+            Self::Passwordless => "Sudo (no password)",
+        }
+    }
+    pub fn enabled(self) -> bool {
+        self != Self::Disabled
+    }
+    pub fn sudoers_rule(self) -> Option<&'static str> {
+        match self {
+            Self::Disabled => None,
+            Self::Password => Some("%wheel ALL=(ALL:ALL) ALL\n"),
+            Self::Passwordless => Some("%wheel ALL=(ALL:ALL) NOPASSWD: ALL\n"),
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Config {
     pub disk: Option<Disk>,
@@ -173,6 +202,8 @@ pub struct Config {
     pub keymap: String,
     pub username: String,
     pub user_password: String,
+    #[serde(default)]
+    pub sudo_mode: SudoMode,
     pub root_password: String,
     pub ssh_enabled: bool,
     pub ssh_public_key: String,
@@ -198,6 +229,7 @@ impl Default for Config {
             keymap: "de".into(),
             username: String::new(),
             user_password: String::new(),
+            sudo_mode: SudoMode::default(),
             root_password: String::new(),
             ssh_enabled: false,
             ssh_public_key: String::new(),
@@ -299,6 +331,7 @@ mod tests {
     #[test]
     fn default_requires_disk_and_credentials() {
         assert!(Config::default().validate().is_err());
+        assert_eq!(Config::default().sudo_mode, SudoMode::Password);
         assert_eq!(Config::default().stage3, Stage3::Base);
         assert_eq!(Config::default().network, Network::Networkd);
         assert_eq!(Config::default().build_jobs, BuildJobs::Auto);
@@ -335,6 +368,30 @@ mod tests {
             ..Config::default()
         };
         assert!(c.validate().unwrap_err().contains("16 GiB"));
+    }
+
+    #[test]
+    fn sudo_modes_map_to_real_sudoers_rules() {
+        assert_eq!(SudoMode::Disabled.sudoers_rule(), None);
+        assert!(!SudoMode::Disabled.enabled());
+        assert_eq!(
+            SudoMode::Password.sudoers_rule(),
+            Some("%wheel ALL=(ALL:ALL) ALL\n")
+        );
+        assert_eq!(
+            SudoMode::Passwordless.sudoers_rule(),
+            Some("%wheel ALL=(ALL:ALL) NOPASSWD: ALL\n")
+        );
+        assert!(SudoMode::Password.enabled());
+        assert!(SudoMode::Passwordless.enabled());
+    }
+
+    #[test]
+    fn older_worker_settings_default_to_password_sudo() {
+        let mut json = serde_json::to_value(Config::default()).unwrap();
+        json.as_object_mut().unwrap().remove("sudo_mode");
+        let restored: Config = serde_json::from_value(json).unwrap();
+        assert_eq!(restored.sudo_mode, SudoMode::Password);
     }
 
     #[test]

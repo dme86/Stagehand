@@ -356,9 +356,11 @@ fn install(c: &Config, report: &mut impl FnMut(usize, &str) -> Result<()>) -> Re
     let mut packages = vec![
         "/usr/bin/emerge",
         "--noreplace",
-        "app-admin/sudo",
         "sys-apps/locale-gen",
     ];
+    if c.sudo_mode.enabled() {
+        packages.push("app-admin/sudo");
+    }
     if c.ssh_enabled {
         packages.push("net-misc/openssh");
     }
@@ -379,29 +381,28 @@ fn install(c: &Config, report: &mut impl FnMut(usize, &str) -> Result<()>) -> Re
         &["/usr/sbin/chpasswd"],
         format!("root:{}\n", c.root_password).as_bytes(),
     )?;
-    inside(&[
-        "/usr/sbin/useradd",
-        "-m",
-        "-G",
-        "wheel",
-        "-s",
-        "/bin/bash",
-        &c.username,
-    ])?;
+    let mut useradd = vec!["/usr/sbin/useradd", "-m"];
+    if c.sudo_mode.enabled() {
+        useradd.extend(["-G", "wheel"]);
+    }
+    useradd.extend(["-s", "/bin/bash", &c.username]);
+    inside(&useradd)?;
     inside_secret(
         &["/usr/sbin/chpasswd"],
         format!("{}:{}\n", c.username, c.user_password).as_bytes(),
     )?;
-    write(
-        "etc/sudoers.d/stagehand-wheel",
-        "%wheel ALL=(ALL:ALL) ALL\n",
-    )?;
-    fs::set_permissions(
-        format!("{ROOT}/etc/sudoers.d/stagehand-wheel"),
-        fs::Permissions::from_mode(0o440),
-    )?;
-    ensure_sudoers_includes()?;
-    inside(&["/usr/sbin/visudo", "-cf", "/etc/sudoers"])?;
+    if let Some(rule) = c.sudo_mode.sudoers_rule() {
+        write("etc/sudoers.d/stagehand-wheel", rule)?;
+        fs::set_permissions(
+            format!("{ROOT}/etc/sudoers.d/stagehand-wheel"),
+            fs::Permissions::from_mode(0o440),
+        )?;
+        ensure_sudoers_includes()?;
+        // Check the full effective configuration AND the generated drop-in
+        // before proceeding; fail safely on any sudoers syntax error.
+        inside(&["/usr/sbin/visudo", "-cf", "/etc/sudoers"])?;
+        inside(&["/usr/sbin/visudo", "-cf", "/etc/sudoers.d/stagehand-wheel"])?;
+    }
     if c.ssh_enabled {
         let ssh = format!("{ROOT}/home/{}/.ssh", c.username);
         fs::create_dir_all(&ssh)?;
@@ -1189,6 +1190,21 @@ mod tests {
         assert!(FilesystemIds::new(ROOT_ID.into(), ROOT_ID.into(), None).is_err());
         assert!(FilesystemIds::new(ROOT_ID.into(), ESP_ID.into(), Some(ROOT_ID.into())).is_err());
     }
+    #[test]
+    fn sudo_selection_controls_package_and_wheel_policy() {
+        use crate::config::SudoMode;
+        assert!(SudoMode::Disabled.sudoers_rule().is_none());
+        assert!(!SudoMode::Disabled.enabled());
+        assert_eq!(
+            SudoMode::Password.sudoers_rule(),
+            Some("%wheel ALL=(ALL:ALL) ALL\n")
+        );
+        assert_eq!(
+            SudoMode::Passwordless.sudoers_rule(),
+            Some("%wheel ALL=(ALL:ALL) NOPASSWD: ALL\n")
+        );
+    }
+
     #[test]
     fn index_parsing() {
         assert_eq!(
