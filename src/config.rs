@@ -1,6 +1,48 @@
 use crate::disks::Disk;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Filesystem {
+    Btrfs,
+    Ext4,
+}
+impl Filesystem {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Btrfs => "Btrfs (zstd, @ and @home)",
+            Self::Ext4 => "ext4 (single root)",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Swap {
+    None,
+    FourGiB,
+}
+impl Swap {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "No swap (default)",
+            Self::FourGiB => "4 GiB swap partition",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Locale {
+    English,
+    German,
+    Utf8,
+}
+impl Locale {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::English => "en_US.UTF-8",
+            Self::German => "de_DE.UTF-8",
+            Self::Utf8 => "C.UTF-8",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kernel {
     Binary,
     Source,
@@ -37,6 +79,10 @@ impl Bootloader {
 #[derive(Clone)]
 pub struct Config {
     pub disk: Option<Disk>,
+    pub filesystem: Filesystem,
+    pub swap: Swap,
+    pub locale: Locale,
+    pub binary_packages: bool,
     pub kernel: Kernel,
     pub bootloader: Bootloader,
     pub hostname: String,
@@ -53,6 +99,10 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             disk: None,
+            filesystem: Filesystem::Btrfs,
+            swap: Swap::None,
+            locale: Locale::English,
+            binary_packages: true,
             kernel: Kernel::Binary,
             bootloader: Bootloader::SystemdBoot,
             hostname: "gentoo".into(),
@@ -70,6 +120,9 @@ impl Default for Config {
 impl Config {
     pub fn validate(&self) -> Result<(), String> {
         let disk = self.disk.as_ref().ok_or("Select an installation disk.")?;
+        if self.swap == Swap::FourGiB && disk.bytes < 16 * 1_073_741_824 {
+            return Err("A 4 GiB swap partition requires a disk of at least 16 GiB.".into());
+        }
         if disk.block_reason.is_some() {
             return Err("The selected disk is mounted, removable, read-only, or too small.".into());
         }
@@ -158,6 +211,10 @@ mod tests {
     #[test]
     fn default_requires_disk_and_credentials() {
         assert!(Config::default().validate().is_err());
+        assert_eq!(Config::default().filesystem, Filesystem::Btrfs);
+        assert_eq!(Config::default().swap, Swap::None);
+        assert_eq!(Config::default().locale, Locale::English);
+        assert!(Config::default().binary_packages);
         assert_eq!(Config::default().kernel, Kernel::Binary);
         assert_eq!(Config::default().bootloader, Bootloader::SystemdBoot);
     }
@@ -169,6 +226,27 @@ mod tests {
         assert!(!valid_hostname("oops;reboot"));
         assert!(!valid_username("root"));
         assert!(!valid_username("UPPER"));
+    }
+
+    #[test]
+    fn swap_requires_sufficient_disk_size() {
+        let mut c = Config::default();
+        c.disk = Some(crate::disks::Disk {
+            path: "/dev/vda".to_owned(),
+            bytes: 8 * 1_073_741_824,
+            model: "Test".to_owned(),
+            contents: crate::disks::DiskContents::NoSignatures,
+            block_reason: None,
+        });
+        c.swap = Swap::FourGiB;
+        assert!(c.validate().unwrap_err().contains("16 GiB"));
+    }
+
+    #[test]
+    fn labels_match_real_installation_choices() {
+        assert_eq!(Filesystem::Btrfs.label(), "Btrfs (zstd, @ and @home)");
+        assert_eq!(Filesystem::Ext4.label(), "ext4 (single root)");
+        assert_eq!(Locale::German.label(), "de_DE.UTF-8");
     }
 
     #[test]
