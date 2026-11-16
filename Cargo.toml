@@ -1,6 +1,6 @@
 [package]
 name = "stagehand"
-version = "0.5.1"
+version = "0.5.2"
 edition = "2021"
 description = "A guided, terminal-based Gentoo Linux installer"
 license = "MIT"
