@@ -21,7 +21,7 @@ in a worker process after the typed disk erase confirmation.
 | 8. Repository | Gentoo chroot, login shell | Source **`/etc/profile`** (after env-update); run `emerge-webrsync` |
 | 9. Packages/kernel | Gentoo chroot, login shell | **First update `sys-apps/systemd` with the `boot` USE flag for systemd-boot**, then install/update `sys-kernel/installkernel` and GRUB (if selected) with `--newuse`; **only then** install Dracut, firmware and Btrfs tools (when selected), the distribution kernel and remaining packages; validate the initramfs with lsinitrd; generate locales |
 | 10. Users | Gentoo chroot | Set credentials through stdin, create administrator, validate sudoers, optionally configure key-only SSH |
-| 11. Services/boot | Gentoo chroot | Enable selected system services; switch installed resolver to systemd-resolved; **recheck ESP mounts**; install EFI bootloader and verify boot artifacts / GRUB entries; GRUB Btrfs roots require `rootflags=subvol=@` |
+| 11. Services/boot | Gentoo chroot | Enable selected system services; switch installed resolver to systemd-resolved; **recheck ESP mounts**; install EFI bootloader and verify BLS default, kernel/initramfs/root parameters, architecture-correct EFI files, or GRUB's default kernel entry against the real root UUID; GRUB Btrfs roots require `rootflags=subvol=@` |
 | 12. Finish | Live ISO | Sync, recursively unmount chroot and installed filesystems; worker records final state |
 
 ## Why these boundaries matter
@@ -57,6 +57,20 @@ firmware and selected filesystem utilities are installed first.
 The generated image is checked against the BLS entry (systemd-boot) or
 a matching kernel version (GRUB), then inspected by `lsinitrd -m` in the
 Gentoo chroot. Any missing or unreadable initramfs stops installation.
+
+
+### Bootloader chain validation (0.5.3)
+
+Before emerging the kernel, systemd-boot installations pin the BLS entry
+name to `gentoo` and explicitly configure `layout=bls`. After installing
+the bootloader, the validator checks the configured default BLS entry,
+its kernel/initrd resources, exact kernel command line, the fallback EFI
+binary, and the systemd EFI loader. `bootctl list` runs inside the chroot.
+
+GRUB validates `grub.cfg` syntax and its **default** Linux entry, including
+real kernel and matching-version initramfs files plus root= UUID identity
+from the installed root partition. Both paths check EFI PE machine type
+(AMD64 vs ARM64) and reject missing or suspicious boot resources.
 
 ## Validation
 

@@ -1,4 +1,5 @@
 use crate::{
+    boot_verify,
     config::{Bootloader, Config, Filesystem, Locale, Network, Stage3, Swap},
     disks,
 };
@@ -341,6 +342,7 @@ fn preflight(c: &Config) -> Result<()> {
     arch()?;
     for command in [
         "lsblk",
+        "blkid",
         "swapon",
         "parted",
         "udevadm",
@@ -653,26 +655,13 @@ fn initramfs_candidates(root: &Path, loader: Bootloader) -> Result<Vec<String>> 
     Ok(images)
 }
 
-fn validate_grub_config(document: &str, filesystem: Filesystem) -> Result<()> {
-    let has_kernel = document.lines().any(|line| {
-        let line = line.trim_start();
-        line.starts_with("linux ") || line.starts_with("linuxefi ")
-    });
-    if !has_kernel {
-        bail!("GRUB configuration contains no Linux kernel entry.");
-    }
-    if filesystem == Filesystem::Btrfs && !document.contains("rootflags=subvol=@") {
-        bail!("GRUB configuration lacks Btrfs rootflags=subvol=@.");
-    }
-    Ok(())
-}
-
 fn install_bootloader(config: &Config) -> Result<()> {
     match config.bootloader {
         Bootloader::SystemdBoot => {
             inside(&[
                 "/usr/bin/bootctl",
                 "--esp-path=/boot",
+                "--entry-token=literal:gentoo",
                 "install",
                 "--no-variables",
             ])?;
@@ -680,21 +669,13 @@ fn install_bootloader(config: &Config) -> Result<()> {
                 "boot/loader/loader.conf",
                 "default gentoo-*\ntimeout 3\neditor no\n",
             )?;
-            let entries = Path::new(ROOT).join("boot/loader/entries");
-            let ukis = Path::new(ROOT).join("boot/EFI/Linux");
-            let has_entries = entries.is_dir()
-                && fs::read_dir(entries)?.any(|e| {
-                    e.ok()
-                        .is_some_and(|f| f.path().extension().is_some_and(|x| x == "conf"))
-                });
-            let has_ukis = ukis.is_dir()
-                && fs::read_dir(ukis)?.any(|e| {
-                    e.ok()
-                        .is_some_and(|f| f.path().extension().is_some_and(|x| x == "efi"))
-                });
-            if !has_entries && !has_ukis {
-                bail!("No systemd-boot entry or UKI found. Inspect the kernel install logs before rebooting.");
-            }
+            // Inspect the *default-selected* BLS entries, referenced
+            // kernel+initramfs, root cmdline and actual EFI loader binaries.
+            boot_verify::verify_systemd_entries(Path::new(ROOT), config.filesystem)?;
+            boot_verify::verify_efi_binary(Path::new(ROOT), arch()?, true)?;
+            // Also ask systemd itself to discover the installed entries,
+            // independent of which live ISO bootloader is currently active.
+            inside(&["/usr/bin/bootctl", "--esp-path=/boot", "--no-pager", "list"])?;
         }
         Bootloader::Grub => {
             // GRUB doesn't consume /etc/kernel/cmdline. The root subvolume
@@ -721,11 +702,17 @@ fn install_bootloader(config: &Config) -> Result<()> {
                 "--no-nvram",
             ])?;
             inside(&["/usr/sbin/grub-mkconfig", "-o", "/boot/grub/grub.cfg"])?;
-            let grub = Path::new(ROOT).join("boot/grub/grub.cfg");
-            if !grub.is_file() || fs::metadata(&grub)?.len() == 0 {
-                bail!("GRUB failed to produce a usable configuration.");
-            }
-            validate_grub_config(&fs::read_to_string(&grub)?, config.filesystem)?;
+            // Validate GRUB syntax, then its *default menuentry* against
+            // this disk's filesystem UUID, kernel, initramfs and Btrfs flags.
+            inside(&["/usr/bin/grub-script-check", "/boot/grub/grub.cfg"])?;
+            let disk = config.disk.as_ref().context("Missing selected boot disk")?;
+            let root_number = if config.swap == Swap::FourGiB { 3 } else { 2 };
+            let root_partition = disks::partition_path(&disk.path, root_number);
+            let uuid = output("blkid", &["-s", "UUID", "-o", "value", &root_partition])?;
+            let uuid = uuid.trim();
+            if uuid.is_empty() { bail!("Unable to read UUID of installed root partition"); }
+            boot_verify::verify_grub_entries(Path::new(ROOT), config.filesystem, uuid)?;
+            boot_verify::verify_efi_binary(Path::new(ROOT), arch()?, false)?;
         }
     }
     Ok(())
@@ -753,6 +740,12 @@ fn configure(c: &Config) -> Result<()> {
     }
     write("etc/fstab", &fstab)?;
     write("etc/kernel/cmdline", cmdline)?;
+    if c.bootloader == Bootloader::SystemdBoot {
+        // Keep the loader default and kernel-install's BLS entries in sync,
+        // even when /etc/machine-id is generated only on first boot.
+        write("etc/kernel/entry-token", "gentoo\n")?;
+        write("etc/kernel/install.conf", "layout=bls\n")?;
+    }
     // Dracut reads /etc/dracut.conf.d during kernel installation inside
     // the chroot. Write this BEFORE Portage installs gentoo-kernel(-bin).
     write("etc/dracut.conf.d/90-stagehand.conf", DRACUT_CONFIG)?;
@@ -1165,15 +1158,5 @@ mod tests {
             .join("\n");
         assert!(validate_chroot_mounts(&missing_home, Filesystem::Ext4).is_ok());
         assert!(validate_chroot_mounts(&missing_home, Filesystem::Btrfs).is_err());
-    }
-    #[test]
-    fn grub_must_have_kernel_and_btrfs_subvolume() {
-        assert!(validate_grub_config("# only comments", Filesystem::Ext4).is_err());
-        let kernel = "menuentry Gentoo {\n linux /vmlinuz root=LABEL=ROOT rw\n}\n";
-        assert!(validate_grub_config(kernel, Filesystem::Ext4).is_ok());
-        assert!(validate_grub_config(kernel, Filesystem::Btrfs).is_err());
-        let btrfs =
-            "menuentry Gentoo {\n linux /vmlinuz root=LABEL=ROOT rootflags=subvol=@ rw\n}\n";
-        assert!(validate_grub_config(btrfs, Filesystem::Btrfs).is_ok());
     }
 }

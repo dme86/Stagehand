@@ -1,3 +1,4 @@
+mod boot_verify;
 mod config;
 mod disks;
 mod install;
