@@ -330,11 +330,7 @@ fn boot_prerequisite_commands(c: &Config) -> Vec<Vec<&'static str>> {
     // filesystem's initramfs. Install them *before* the dracut transaction
     // and, critically, before installing gentoo-kernel(-bin).
     if c.filesystem == Filesystem::Btrfs {
-        commands.push(vec![
-            "/usr/bin/emerge",
-            "--noreplace",
-            "sys-fs/btrfs-progs",
-        ]);
+        commands.push(vec!["/usr/bin/emerge", "--noreplace", "sys-fs/btrfs-progs"]);
     }
     commands.push(vec![
         "/usr/bin/emerge",
@@ -1082,7 +1078,10 @@ mod tests {
         c.filesystem = Filesystem::Ext4;
         let ext4 = boot_prerequisite_commands(&c);
         assert_eq!(ext4.len(), 2);
-        assert!(!ext4.iter().flatten().any(|item| *item == "sys-fs/btrfs-progs"));
+        assert!(!ext4
+            .iter()
+            .flatten()
+            .any(|item| *item == "sys-fs/btrfs-progs"));
         assert!(pre_kernel_filesystem_checks(&c).is_empty());
 
         c.bootloader = Bootloader::SystemdBoot;
