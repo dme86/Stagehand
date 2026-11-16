@@ -287,11 +287,18 @@ fn boot_prerequisite_commands(c: &Config) -> Vec<Vec<&'static str>> {
     let mut commands = Vec::new();
     if c.bootloader == Bootloader::SystemdBoot {
         commands.push(vec![
-            "/usr/bin/emerge", "--update", "--newuse", "--oneshot", "sys-apps/systemd",
+            "/usr/bin/emerge",
+            "--update",
+            "--newuse",
+            "--oneshot",
+            "sys-apps/systemd",
         ]);
     }
     let mut installkernel = vec![
-        "/usr/bin/emerge", "--update", "--newuse", "--oneshot",
+        "/usr/bin/emerge",
+        "--update",
+        "--newuse",
+        "--oneshot",
         "sys-kernel/installkernel",
     ];
     if c.bootloader == Bootloader::Grub {
@@ -704,10 +711,18 @@ fn validate_chroot_mounts(mountinfo: &str, filesystem: Filesystem) -> Result<()>
     Ok(())
 }
 fn verify_chroot_ready(mountinfo: &str, config: &Config) -> Result<()> {
-    for file in ["etc/gentoo-release", "etc/portage/make.conf", "etc/fstab", "etc/resolv.conf"] {
+    for file in [
+        "etc/gentoo-release",
+        "etc/portage/make.conf",
+        "etc/fstab",
+        "etc/resolv.conf",
+    ] {
         let path = Path::new(ROOT).join(file);
         if !path.is_file() {
-            bail!("Missing staged Gentoo configuration {}. Refusing to chroot.", path.display());
+            bail!(
+                "Missing staged Gentoo configuration {}. Refusing to chroot.",
+                path.display()
+            );
         }
     }
     validate_chroot_mounts(mountinfo, config.filesystem)
@@ -721,7 +736,10 @@ fn chroot_command(args: &[&str]) -> Command {
         .args(args)
         .env_clear()
         .env("HOME", "/root")
-        .env("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+        .env(
+            "PATH",
+            "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        )
         .env("LANG", "C.UTF-8")
         .env("LC_ALL", "C.UTF-8")
         .env("TERM", "dumb");
@@ -761,7 +779,11 @@ fn inside_secret(args: &[&str], secret: &[u8]) -> Result<()> {
         .stderr(Stdio::from(log))
         .spawn()
         .context("Start credential setup in Gentoo chroot")?;
-    child.stdin.take().context("Could not pipe credentials")?.write_all(secret)?;
+    child
+        .stdin
+        .take()
+        .context("Could not pipe credentials")?
+        .write_all(secret)?;
     if !child.wait()?.success() {
         bail!("Credential setup failed. See {LOG}");
     }
@@ -867,7 +889,10 @@ mod tests {
     fn handbook_installation_phase_order() {
         assert_eq!(PHASES.len(), STEP_COUNT);
         let position = |description: &str| {
-            PHASES.iter().position(|phase| phase.contains(description)).unwrap()
+            PHASES
+                .iter()
+                .position(|phase| phase.contains(description))
+                .unwrap()
         };
         assert!(position("Fetch and verify") < position("Partition selected disk"));
         assert!(position("Partition selected disk") < position("Extract systemd stage3"));
@@ -889,15 +914,28 @@ mod tests {
             format!("{ROOT}/dev"),
             format!("{ROOT}/run"),
         ];
-        let mountinfo = paths.iter().enumerate().map(|(id, path)| {
-            format!("{} 1 0:12 / {path} rw,relatime - ext4 /dev/vda2 rw\n", id + 11)
-        }).collect::<String>();
+        let mountinfo = paths
+            .iter()
+            .enumerate()
+            .map(|(id, path)| {
+                format!(
+                    "{} 1 0:12 / {path} rw,relatime - ext4 /dev/vda2 rw\n",
+                    id + 11
+                )
+            })
+            .collect::<String>();
         assert!(validate_chroot_mounts(&mountinfo, Filesystem::Btrfs).is_ok());
-        let missing_boot = mountinfo.lines().filter(|line| !line.contains(&format!("{ROOT}/boot ")))
-            .collect::<Vec<_>>().join("\n");
+        let missing_boot = mountinfo
+            .lines()
+            .filter(|line| !line.contains(&format!("{ROOT}/boot ")))
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(validate_chroot_mounts(&missing_boot, Filesystem::Btrfs).is_err());
-        let missing_home = mountinfo.lines().filter(|line| !line.contains(&format!("{ROOT}/home ")))
-            .collect::<Vec<_>>().join("\n");
+        let missing_home = mountinfo
+            .lines()
+            .filter(|line| !line.contains(&format!("{ROOT}/home ")))
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(validate_chroot_mounts(&missing_home, Filesystem::Ext4).is_ok());
         assert!(validate_chroot_mounts(&missing_home, Filesystem::Btrfs).is_err());
     }
@@ -907,8 +945,8 @@ mod tests {
         let kernel = "menuentry Gentoo {\n linux /vmlinuz root=LABEL=ROOT rw\n}\n";
         assert!(validate_grub_config(kernel, Filesystem::Ext4).is_ok());
         assert!(validate_grub_config(kernel, Filesystem::Btrfs).is_err());
-        let btrfs = "menuentry Gentoo {\n linux /vmlinuz root=LABEL=ROOT rootflags=subvol=@ rw\n}\n";
+        let btrfs =
+            "menuentry Gentoo {\n linux /vmlinuz root=LABEL=ROOT rootflags=subvol=@ rw\n}\n";
         assert!(validate_grub_config(btrfs, Filesystem::Btrfs).is_ok());
     }
-
 }
