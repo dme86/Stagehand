@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.svg" alt="Stagehand — Gentoo installer" width="260">
+  <img src="assets/logo.svg" alt="Stagehand — a gentoo installer" width="320">
 </p>
 
 <h1 align="center">Stagehand</h1>
@@ -150,9 +150,9 @@ processes rather than interpolating settings into shell scripts.
 
 ## Branding
 
-The `assets/logo.svg` file is a temporary repository wordmark. The original
-Stagehand logo shared in chat should replace it once the **original image
-file** is available as an upload or repository asset.
+The official Stagehand logo is included as a scalable SVG with a transparent
+background in [`assets/logo.svg`](assets/logo.svg). The violet Gentoo-inspired
+emblem, download symbol and wordmark follow the approved Stagehand artwork.
 
 ## License
 
