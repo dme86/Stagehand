@@ -52,7 +52,7 @@ impl Config {
         if self.user_password.chars().count() < 8 || self.root_password.chars().count() < 8 {
             return Err("User and root passwords must each contain at least 8 characters.".into());
         }
-        if self.user_password.contains(['\n', '\r']) || self.root_password.contains(['\n', '\r']) {
+        if self.user_password.chars().any(|c| c == '\n' || c == '\r') || self.root_password.chars().any(|c| c == '\n' || c == '\r') {
             return Err("Passwords cannot contain newlines.".into());
         }
         if self.ssh_enabled && !valid_ssh_key(&self.ssh_public_key) {
