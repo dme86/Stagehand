@@ -10,7 +10,7 @@ A keyboard-first, guided **Gentoo Linux installer written in Rust**. Inspired by
 Stagehand lets you configure an installation in a clean terminal interface,
 review every decision, and install only after explicit confirmation.
 
-> **Early development (v0.5.6).** The installer has not yet passed an end-to-end
+> **Early development (v0.5.7).** The installer has not yet passed an end-to-end
 > UEFI VM boot test. **Do not run it against a disk containing valuable data.**
 > Use a disposable virtual machine until the installation and boot path are validated.
 
@@ -18,7 +18,7 @@ review every decision, and install only after explicit confirmation.
 
 ```text
 ┌ Welcome ────────────────────────────────────────────────────────────────┐
-│ STAGEHAND              Gentoo installer · v0.5.6 · AMD64 / x86_64       │
+│ STAGEHAND              Gentoo installer · v0.5.7 · AMD64 / x86_64       │
 ├ Installation settings ───┬ Details ─────────────────────────────────────┤
 │ › Storage                │ Welcome to Stagehand.                       │
 │     /dev/vda · Btrfs     │                                            │
@@ -55,7 +55,7 @@ a graphical environment, or a desktop environment.
 - Portage: prefer binary packages (default) or compile from source; automatic, 2-job or 4-job MAKEOPTS.
 - Networking: systemd-networkd with wired DHCP (default) or NetworkManager with Ethernet/Wi-Fi support.
 - System tools: optional cronie daemon and a preferred text editor (none, nano or vim).
-- Local administrator account and root credentials, with password confirmation.
+- Local user and root credentials, with password confirmation. Sudo is optional: disabled, requires the user's password (default), or passwordless.
 - Optional SSH with public-key authentication (password SSH and root SSH disabled).
 - Final installation review and a mandatory typed `ERASE /dev/...` confirmation.
 
@@ -130,7 +130,7 @@ The left-hand main menu deliberately stays small:
 - **System** — hostname, timezone, keymap, UTF-8 locale, base/desktop Stage3.
 - **Kernel & boot** — `gentoo-kernel-bin` or `gentoo-kernel`; systemd-boot or GRUB (UEFI).
 - **Network** — systemd-networkd or NetworkManager, optional key-only SSH and public key.
-- **Users** — administrator name/password and root password.
+- **Users** — local username/password, root password, and sudo mode (disabled, password, passwordless).
 - **Portage** — binary packages preferred or source builds; automatic, two or four parallel build jobs.
 - **System tools** — nano/vim/no additional editor, optional cronie.
 - **Install Gentoo** — full summary and typed `ERASE /dev/...` confirmation.
@@ -199,7 +199,7 @@ See the systemd
 and [bootctl](https://www.freedesktop.org/software/systemd/man/latest/bootctl.html)
 documentation.
 
-## Bootloader verification (v0.5.6)
+## Bootloader verification (v0.5.7)
 
 Stagehand now verifies the **installed EFI boot chain** after setting up
 the bootloader, rather than treating the existence of an entry file as proof.
@@ -237,7 +237,35 @@ full firmware simulation, Secure Boot signature verification, or
 proof that a hardware-specific initramfs successfully boots. A
 complete QEMU/OVMF install-and-reboot test is still required.
 
-## Stable filesystem UUIDs for root, EFI and swap (v0.5.6)
+## Sudo permissions and Gruvbox selection colors (v0.5.7)
+
+Configured settings and active defaults are now displayed in a soft
+**Gruvbox green** (`#8ec07c`) in the main menu and individual submenus.
+Required but unconfigured values such as the target disk or user credentials
+remain amber. The optional SSH public key stays muted when SSH is disabled,
+and becomes amber only if SSH is enabled without a key. Selection highlights
+preserve the status colors rather than overriding them with amber.
+
+The **Users** submenu now exposes a clear `Sudo access` selection:
+
+| Choice | User group | Portage | Installed sudoers policy |
+| --- | --- | --- | --- |
+| No sudo | Not added to `wheel` | No `app-admin/sudo` | No Stagehand sudoers drop-in |
+| Sudo with password **(default)** | Added to `wheel` | `app-admin/sudo` | `%wheel ALL=(ALL:ALL) ALL` |
+| Sudo without password | Added to `wheel` | `app-admin/sudo` | `%wheel ALL=(ALL:ALL) NOPASSWD: ALL` |
+
+If sudo is enabled, Stagehand installs the package through Portage **before**
+writing `/etc/sudoers.d/stagehand-wheel`. The drop-in uses file mode `0440`,
+the main sudoers file is made to include the drop-in directory if needed,
+and both configurations are checked with `visudo -cf` in the Gentoo chroot.
+Any syntax error aborts installation.
+
+With sudo disabled, Stagehand does not install sudo or create a sudoers
+policy for this user. Root retains its separate password. With passwordless
+sudo, the user can execute commands as root **without authentication**;
+choose this only when the environment and account are trusted.
+
+## Stable filesystem UUIDs for root, EFI and swap (v0.5.7)
 
 Stagehand no longer uses `LABEL=ROOT`, `LABEL=EFI`, or `LABEL=SWAP`
 as installed filesystem identifiers. After formatting the target disk,
@@ -413,7 +441,7 @@ test: use a disposable UEFI QEMU disk before trusting a new configuration.
 
 ## Gentoo Handbook coverage
 
-Stagehand v0.5.6 incorporates additional choices from the official
+Stagehand v0.5.7 incorporates additional choices from the official
 [Gentoo AMD64 Handbook](https://wiki.gentoo.org/wiki/Handbook:AMD64).
 Both AMD64 and ARM64 offer standard and desktop systemd Stage3 archives; desktop
 Stage3 includes extra development tools, **not a preinstalled graphical environment**.

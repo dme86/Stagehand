@@ -1,6 +1,7 @@
 use crate::{
     config::{
-        Bootloader, BuildJobs, Config, Editor, Filesystem, Kernel, Locale, Network, Stage3, Swap,
+        Bootloader, BuildJobs, Config, Editor, Filesystem, Kernel, Locale, Network, Stage3,
+        SudoMode, Swap,
     },
     disks::{self, Disk},
     install,
@@ -68,7 +69,7 @@ impl Section {
             ],
             Self::Boot => &["Kernel", "Bootloader"],
             Self::Network => &["Network manager", "SSH service", "SSH public key"],
-            Self::Users => &["Username", "User password", "Root password"],
+            Self::Users => &["Username", "User password", "Root password", "Sudo access"],
             Self::Portage => &["Binary packages", "Build jobs"],
             Self::Tools => &["Editor", "Cron daemon"],
         }
@@ -118,6 +119,7 @@ enum Choice {
     Network,
     BuildJobs,
     Editor,
+    Sudo,
 }
 impl Choice {
     fn section(self) -> Section {
@@ -127,12 +129,13 @@ impl Choice {
             Self::Network => Section::Network,
             Self::BuildJobs => Section::Portage,
             Self::Editor => Section::Tools,
+            Self::Sudo => Section::Users,
             Self::Kernel | Self::Bootloader => Section::Boot,
         }
     }
     fn count(self) -> usize {
         match self {
-            Self::Locale | Self::BuildJobs | Self::Editor => 3,
+            Self::Locale | Self::BuildJobs | Self::Editor | Self::Sudo => 3,
             _ => 2,
         }
     }
@@ -274,6 +277,11 @@ impl App {
                 Editor::Nano => 1,
                 Editor::Vim => 2,
             },
+            Choice::Sudo => match self.config.sudo_mode {
+                SudoMode::Disabled => 0,
+                SudoMode::Password => 1,
+                SudoMode::Passwordless => 2,
+            },
         };
         self.page = Page::Pick(choice);
         self.error.clear();
@@ -297,6 +305,7 @@ impl App {
             (Section::Users, 0) => self.edit(Field::Username),
             (Section::Users, 1) => self.edit(Field::UserPassword),
             (Section::Users, 2) => self.edit(Field::RootPassword),
+            (Section::Users, 3) => self.pick(Choice::Sudo),
             (Section::Portage, 0) => self.config.binary_packages = !self.config.binary_packages,
             (Section::Portage, 1) => self.pick(Choice::BuildJobs),
             (Section::Tools, 0) => self.pick(Choice::Editor),
@@ -482,6 +491,13 @@ impl App {
                                 _ => Editor::Vim,
                             }
                         }
+                        Choice::Sudo => {
+                            self.config.sudo_mode = match self.choice_index {
+                                0 => SudoMode::Disabled,
+                                1 => SudoMode::Password,
+                                _ => SudoMode::Passwordless,
+                            }
+                        }
                     }
                     self.page = Page::Section(choice.section());
                     self.error.clear();
@@ -625,7 +641,7 @@ fn render(frame: &mut Frame, app: &App) {
             Style::default().fg(AMBER).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            "Gentoo installer  ·  v0.5.6  ·  ",
+            "Gentoo installer  ·  v0.5.7  ·  ",
             Style::default().fg(MUTED),
         ),
         Span::styled(arch_label(), Style::default().fg(AQUA)),
@@ -690,10 +706,12 @@ fn section_value(app: &App, section: Section, index: usize) -> String {
             "Disabled"
         }
         .into(),
-        (Section::Network, 2) => if app.config.ssh_public_key.is_empty() {
-            "Not set"
-        } else {
+        (Section::Network, 2) => if !app.config.ssh_public_key.is_empty() {
             "Configured"
+        } else if !app.config.ssh_enabled {
+            "Not required (SSH off)"
+        } else {
+            "Not set"
         }
         .into(),
         (Section::Users, 0) => {
@@ -715,6 +733,7 @@ fn section_value(app: &App, section: Section, index: usize) -> String {
             "Configured"
         }
         .into(),
+        (Section::Users, 3) => app.config.sudo_mode.label().into(),
         (Section::Portage, 0) => if app.config.binary_packages {
             "Prefer binary packages"
         } else {
@@ -732,6 +751,39 @@ fn section_value(app: &App, section: Section, index: usize) -> String {
         _ => String::new(),
     }
 }
+/// The main Users category is only complete when both account passwords
+/// satisfy the installer's minimum length requirement.
+fn users_ready(config: &Config) -> bool {
+    !config.username.is_empty()
+        && config.user_password.chars().count() >= 8
+        && config.root_password.chars().count() >= 8
+}
+
+/// Established defaults and chosen values are a soft Gruvbox green.
+/// Incomplete required settings are amber; optional unset fields remain muted.
+fn menu_value_color(app: &App, section: Option<Section>, index: usize) -> Color {
+    match (section, index) {
+        (None, 0) if app.config.disk.is_none() => AMBER,
+        (None, 4) if !users_ready(&app.config) => AMBER,
+        (None, 7) => MUTED,
+        (Some(Section::Storage), 0) if app.config.disk.is_none() => AMBER,
+        (Some(Section::Users), 0) if app.config.username.is_empty() => AMBER,
+        (Some(Section::Users), 1) if app.config.user_password.chars().count() < 8 => AMBER,
+        (Some(Section::Users), 2) if app.config.root_password.chars().count() < 8 => AMBER,
+        (Some(Section::Network), 2)
+            if !app.config.ssh_enabled && app.config.ssh_public_key.is_empty() =>
+        {
+            MUTED
+        }
+        (Some(Section::Network), 2)
+            if app.config.ssh_enabled && app.config.ssh_public_key.is_empty() =>
+        {
+            AMBER
+        }
+        _ => AQUA,
+    }
+}
+
 fn render_menu(frame: &mut Frame, area: Rect, app: &App) {
     if matches!(app.page, Page::Installing | Page::Done | Page::Failed) {
         let completed = app.status.as_ref().map_or(0, |s| s.completed);
@@ -813,10 +865,10 @@ fn render_menu(frame: &mut Frame, area: Rect, app: &App) {
                     ),
                     (
                         "Users".into(),
-                        if app.config.username.is_empty() {
-                            "Not configured".into()
+                        if users_ready(&app.config) {
+                            format!("{} · {}", app.config.username, app.config.sudo_mode.label())
                         } else {
-                            app.config.username.clone()
+                            format!("Not configured · {}", app.config.sudo_mode.label())
                         },
                     ),
                     (
@@ -844,21 +896,21 @@ fn render_menu(frame: &mut Frame, area: Rect, app: &App) {
         .map(|(i, (name, value))| {
             let special = section.is_none() && i == 7;
             let marker = if special { "▶" } else { "›" };
+            let value_color = menu_value_color(app, section, i);
             ListItem::new(vec![
                 Line::styled(
                     format!(" {marker} {name}"),
-                    Style::default().fg(if special { AMBER } else { FG }),
+                    Style::default().fg(if special || i == index { AMBER } else { FG }),
                 ),
-                Line::styled(format!("     {value}"), Style::default().fg(MUTED)),
+                Line::styled(format!("     {value}"), Style::default().fg(value_color)),
             ])
         })
         .collect();
-    let list = List::new(items).block(panel(title)).highlight_style(
-        Style::default()
-            .bg(PANEL)
-            .fg(AMBER)
-            .add_modifier(Modifier::BOLD),
-    );
+    // Do not set a highlight foreground: it would overwrite the green
+    // configured values (and amber missing-value warnings).
+    let list = List::new(items)
+        .block(panel(title))
+        .highlight_style(Style::default().bg(PANEL).add_modifier(Modifier::BOLD));
     let mut state = ListState::default().with_selected(Some(index));
     frame.render_stateful_widget(list, area, &mut state);
 }
@@ -870,7 +922,7 @@ fn render_details(frame: &mut Frame, area: Rect, app: &App) {
                 1 => "Configure hostname, timezone, console keymap, locale and base/desktop Stage3.",
                 2 => "Choose the Gentoo kernel package and an EFI bootloader. Both choices affect the actual installation.",
                 3 => "Choose systemd-networkd (wired DHCP) or NetworkManager (Wi-Fi-capable). SSH is optional.",
-                4 => "Set a local administrator account and root credentials.",
+                4 => "Set the local user and root password, then choose whether sudo requires a password, runs passwordless, or is disabled.",
                 5 => "Choose binary package preference and parallel build jobs for Portage.",
                 6 => "Choose a console editor and optionally enable the cronie scheduler.",
                 _ => "Review every choice, then explicitly authorize installation on the selected disk.",
@@ -885,7 +937,8 @@ fn render_details(frame: &mut Frame, area: Rect, app: &App) {
                 • GPT / UEFI, filesystem: {}\n\
                 • Swap: {}\n\
                 • Locale: {}\n\
-                • Network: {}\n\n\
+                • Network: {}\n\
+                • Sudo: {}\n\n\
                 Enter a category to configure its options.\n\
                 Nothing is written to a disk until final confirmation.",
                 arch_label(),
@@ -895,7 +948,8 @@ fn render_details(frame: &mut Frame, area: Rect, app: &App) {
                 app.config.filesystem.label(),
                 app.config.swap.label(),
                 app.config.locale.label(),
-                app.config.network.label()
+                app.config.network.label(),
+                app.config.sudo_mode.label()
             )
         }
         Page::Section(section) => {
@@ -923,9 +977,11 @@ fn render_details(frame: &mut Frame, area: Rect, app: &App) {
                     "Enable SSH with public key authentication. Password/root SSH login stays disabled.",
                 (Section::Network, _) =>
                     "Paste an OpenSSH public key. Required only when SSH is enabled.",
-                (Section::Users, 0) => "Set the name of the local administrator.",
-                (Section::Users, 1) => "The administrator joins wheel with sudo permission.",
-                (Section::Users, _) => "Set a separate root password.",
+                (Section::Users, 0) => "Choose the local account name. Sudo access is configured separately below.",
+                (Section::Users, 1) => "Set the user's login password. It is also used for sudo when password authentication is selected.",
+                (Section::Users, 2) => "Set a separate root password, even if sudo is disabled.",
+                (Section::Users, _) =>
+                    "Choose no sudo, sudo requiring the user's password (default), or passwordless sudo. Passwordless sudo grants full root access without authentication; use only on trusted systems.",
                 (Section::Portage, 0) =>
                     "Prefer Gentoo binary packages or compile from source. Preserve the Stage3 profile and binhost.",
                 (Section::Portage, _) =>
@@ -1019,6 +1075,14 @@ fn render_details(frame: &mut Frame, area: Rect, app: &App) {
                     &["Automatic (default)", "2 jobs", "4 jobs"],
                 ),
                 Choice::Editor => ("Console editor", &["None", "nano (default)", "vim"]),
+                Choice::Sudo => (
+                    "Sudo privileges",
+                    &[
+                        "No sudo (user is not in wheel)",
+                        "Sudo with password (default)",
+                        "Sudo without password (NOPASSWD)",
+                    ],
+                ),
             };
             let options = options
                 .iter()
@@ -1081,6 +1145,7 @@ fn render_details(frame: &mut Frame, area: Rect, app: &App) {
                 Editor:       {}\n\
                 Cron:         {}\n\
                 User:         {}\n\
+                Sudo:         {}\n\
                 SSH:          {}\n\n\
                 WARNING: All data on {path} will be destroyed!\n\
                 Type: ERASE {path}\n\n> {}█",
@@ -1108,6 +1173,7 @@ fn render_details(frame: &mut Frame, area: Rect, app: &App) {
                     "Disabled"
                 },
                 app.config.username,
+                app.config.sudo_mode.label(),
                 if app.config.ssh_enabled {
                     "Key-only"
                 } else {
@@ -1274,4 +1340,45 @@ fn log_tail(lines: usize) -> String {
         .rev()
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[cfg(test)]
+mod menu_tests {
+    use super::*;
+
+    #[test]
+    fn completed_defaults_are_green_and_missing_values_amber() {
+        let mut app = App::new();
+        assert_eq!(menu_value_color(&app, None, 0), AMBER);
+        assert_eq!(menu_value_color(&app, None, 1), AQUA);
+        assert_eq!(menu_value_color(&app, None, 2), AQUA);
+        assert_eq!(menu_value_color(&app, None, 4), AMBER);
+        assert_eq!(menu_value_color(&app, None, 6), AQUA);
+        assert_eq!(menu_value_color(&app, Some(Section::Users), 3), AQUA);
+        assert_eq!(menu_value_color(&app, Some(Section::Network), 2), MUTED);
+        app.config.ssh_enabled = true;
+        assert_eq!(menu_value_color(&app, Some(Section::Network), 2), AMBER);
+        app.config.ssh_public_key = "ssh-ed25519 fake".into();
+        assert_eq!(menu_value_color(&app, Some(Section::Network), 2), AQUA);
+    }
+
+    #[test]
+    fn user_section_becomes_green_when_credentials_configured() {
+        let mut app = App::new();
+        app.config.username = "dan".into();
+        app.config.user_password = "long-password".into();
+        app.config.root_password = "another-long-password".into();
+        assert!(users_ready(&app.config));
+        assert_eq!(menu_value_color(&app, None, 4), AQUA);
+        app.config.root_password.clear();
+        assert!(!users_ready(&app.config));
+        assert_eq!(menu_value_color(&app, None, 4), AMBER);
+    }
+
+    #[test]
+    fn sudo_choice_has_three_options_and_belongs_to_users() {
+        assert_eq!(Choice::Sudo.count(), 3);
+        assert!(Choice::Sudo.section() == Section::Users);
+        assert_eq!(Section::Users.entries()[3], "Sudo access");
+    }
 }
