@@ -17,7 +17,12 @@ impl Disk {
 
 pub fn discover() -> Result<Vec<Disk>> {
     let output = Command::new("lsblk")
-        .args(["--json", "--bytes", "--output", "PATH,TYPE,SIZE,MODEL,RO,RM,MOUNTPOINTS"])
+        .args([
+            "--json",
+            "--bytes",
+            "--output",
+            "PATH,TYPE,SIZE,MODEL,RO,RM,MOUNTPOINTS",
+        ])
         .output()
         .context("Run lsblk (required to discover target disks)")?;
     if !output.status.success() {
@@ -25,7 +30,10 @@ pub fn discover() -> Result<Vec<Disk>> {
     }
     let json: Value = serde_json::from_slice(&output.stdout).context("Parse lsblk JSON")?;
     let mut disks = Vec::new();
-    for node in json["blockdevices"].as_array().context("Missing blockdevices")? {
+    for node in json["blockdevices"]
+        .as_array()
+        .context("Missing blockdevices")?
+    {
         if node["type"].as_str() != Some("disk")
             || flag(&node["ro"])
             || flag(&node["rm"])
@@ -33,7 +41,9 @@ pub fn discover() -> Result<Vec<Disk>> {
         {
             continue;
         }
-        let Some(path) = node["path"].as_str() else { continue };
+        let Some(path) = node["path"].as_str() else {
+            continue;
+        };
         if !path.starts_with("/dev/") {
             continue;
         }
@@ -47,7 +57,11 @@ pub fn discover() -> Result<Vec<Disk>> {
         disks.push(Disk {
             path: path.to_string(),
             bytes,
-            model: node["model"].as_str().unwrap_or("Unknown disk").trim().to_string(),
+            model: node["model"]
+                .as_str()
+                .unwrap_or("Unknown disk")
+                .trim()
+                .to_string(),
         });
     }
     disks.sort_by(|a, b| a.path.cmp(&b.path));
@@ -55,25 +69,33 @@ pub fn discover() -> Result<Vec<Disk>> {
 }
 
 fn flag(value: &Value) -> bool {
-    value.as_bool() == Some(true)
-        || value.as_u64() == Some(1)
-        || value.as_str() == Some("1")
+    value.as_bool() == Some(true) || value.as_u64() == Some(1) || value.as_str() == Some("1")
 }
 
 fn is_mounted(node: &Value) -> bool {
     if node["mountpoints"].as_array().is_some_and(|mounts| {
-        mounts.iter().any(|point| point.as_str().is_some_and(|s| !s.is_empty()))
+        mounts
+            .iter()
+            .any(|point| point.as_str().is_some_and(|s| !s.is_empty()))
     }) {
         return true;
     }
-    node["children"].as_array().is_some_and(|children| children.iter().any(is_mounted))
+    node["children"]
+        .as_array()
+        .is_some_and(|children| children.iter().any(is_mounted))
 }
 
 /// Recheck the chosen device immediately before any destructive operation.
 pub fn verify_target(selected: &Disk) -> Result<()> {
     let present = discover()?;
-    if !present.iter().any(|disk| disk.path == selected.path && disk.bytes == selected.bytes) {
-        bail!("Disk {} is missing, mounted, read-only, removable, or has changed size. Aborting.", selected.path);
+    if !present
+        .iter()
+        .any(|disk| disk.path == selected.path && disk.bytes == selected.bytes)
+    {
+        bail!(
+            "Disk {} is missing, mounted, read-only, removable, or has changed size. Aborting.",
+            selected.path
+        );
     }
     let output = Command::new("swapon")
         .args(["--noheadings", "--raw", "--output", "NAME"])

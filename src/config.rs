@@ -42,7 +42,10 @@ impl Config {
         }
         if self.keymap.is_empty()
             || self.keymap.len() > 32
-            || !self.keymap.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+            || !self
+                .keymap
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
         {
             return Err("Keymap must contain only lowercase letters, digits, '-' or '_'.".into());
         }
@@ -52,7 +55,9 @@ impl Config {
         if self.user_password.chars().count() < 8 || self.root_password.chars().count() < 8 {
             return Err("User and root passwords must each contain at least 8 characters.".into());
         }
-        if self.user_password.chars().any(|c| c == '\n' || c == '\r') || self.root_password.chars().any(|c| c == '\n' || c == '\r') {
+        if self.user_password.chars().any(|c| c == '\n' || c == '\r')
+            || self.root_password.chars().any(|c| c == '\n' || c == '\r')
+        {
             return Err("Passwords cannot contain newlines.".into());
         }
         if self.ssh_enabled && !valid_ssh_key(&self.ssh_public_key) {
@@ -66,8 +71,14 @@ fn valid_hostname(host: &str) -> bool {
     !host.is_empty()
         && host.len() <= 63
         && host.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
-        && host.as_bytes().first().is_some_and(u8::is_ascii_alphanumeric)
-        && host.as_bytes().last().is_some_and(u8::is_ascii_alphanumeric)
+        && host
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && host
+            .as_bytes()
+            .last()
+            .is_some_and(u8::is_ascii_alphanumeric)
 }
 
 fn valid_username(user: &str) -> bool {
@@ -75,14 +86,20 @@ fn valid_username(user: &str) -> bool {
         && user.len() <= 32
         && user != "root"
         && user.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
-        && user.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
+        && user
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
 }
 
 fn valid_timezone(zone: &str) -> bool {
     !zone.is_empty()
         && zone.len() <= 128
-        && zone.split('/').all(|part| !part.is_empty() && part != "." && part != "..")
-        && zone.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'_' | b'-' | b'+'))
+        && zone
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..")
+        && zone
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'_' | b'-' | b'+'))
 }
 
 fn valid_ssh_key(key: &str) -> bool {
@@ -90,7 +107,9 @@ fn valid_ssh_key(key: &str) -> bool {
     parts.len() >= 2
         && (matches!(parts[0], "ssh-ed25519" | "ssh-rsa") || parts[0].starts_with("ecdsa-sha2-"))
         && parts[1].len() >= 32
-        && parts[1].bytes().all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'=')
+        && parts[1]
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'=')
 }
 
 #[cfg(test)]
