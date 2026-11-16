@@ -37,7 +37,11 @@ pub const PHASES: [&str; 12] = [
 pub fn run(c: &Config, report: &mut impl FnMut(usize, &str) -> Result<()>) -> Result<()> {
     install(c, report)
 }
-fn progress(report: &mut impl FnMut(usize, &str) -> Result<()>, n: usize, title: &str) -> Result<()> {
+fn progress(
+    report: &mut impl FnMut(usize, &str) -> Result<()>,
+    n: usize,
+    title: &str,
+) -> Result<()> {
     report(n, title)
 }
 fn install(c: &Config, report: &mut impl FnMut(usize, &str) -> Result<()>) -> Result<()> {

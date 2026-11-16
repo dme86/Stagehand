@@ -80,8 +80,9 @@ fn publish(status: &RunStatus) -> Result<()> {
 }
 pub fn read_status() -> Result<Option<RunStatus>> {
     match fs::read(STATUS_PATH) {
-        Ok(data) => Ok(Some(serde_json::from_slice(&data)
-            .context("Invalid Stagehand status JSON")?)),
+        Ok(data) => Ok(Some(
+            serde_json::from_slice(&data).context("Invalid Stagehand status JSON")?,
+        )),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e.into()),
     }
@@ -89,7 +90,9 @@ pub fn read_status() -> Result<Option<RunStatus>> {
 
 /// Linux-only PID check avoids mistaking a reused PID for our worker.
 pub fn worker_alive(pid: u32) -> bool {
-    if pid == 0 { return false; }
+    if pid == 0 {
+        return false;
+    }
     fs::read(format!("/proc/{pid}/cmdline"))
         .is_ok_and(|data| data.split(|b| *b == 0).any(|arg| arg == b"--worker"))
 }
@@ -132,19 +135,26 @@ pub fn spawn(config: &Config) -> Result<u32> {
     }
     let mut child = cmd.spawn().context("Launch detached installer worker")?;
     let pid = child.id();
-    let transfer = child.stdin.take().context("Worker stdin unavailable")?
+    let transfer = child
+        .stdin
+        .take()
+        .context("Worker stdin unavailable")?
         .write_all(&json);
     json.fill(0);
     transfer.context("Transfer installation settings to worker")?;
     // Reap the worker while TUI remains open, preventing a zombie child.
-    thread::spawn(move || { let _ = child.wait(); });
+    thread::spawn(move || {
+        let _ = child.wait();
+    });
     Ok(pid)
 }
 
 /// Internal mode, invoked from the same executable with --worker.
 pub fn run() -> Result<()> {
     let mut bytes = Vec::new();
-    io::stdin().take(MAX_CONFIG_BYTES + 1).read_to_end(&mut bytes)?;
+    io::stdin()
+        .take(MAX_CONFIG_BYTES + 1)
+        .read_to_end(&mut bytes)?;
     if bytes.len() as u64 > MAX_CONFIG_BYTES {
         bytes.fill(0);
         bail!("Installer configuration exceeds size limit");
@@ -163,7 +173,15 @@ pub fn run() -> Result<()> {
         Ok(()) => status.finish(),
         Err(e) => status.fail(format!("{e:#}")),
     }
+    let failed = status.state == RunState::Failed;
     publish(&status)?;
+    if failed {
+        bail!(
+            "Installation failed. See {} and {}",
+            install::LOG,
+            STATUS_PATH
+        );
+    }
     Ok(())
 }
 
@@ -180,7 +198,9 @@ impl WorkerLock {
     }
 }
 impl Drop for WorkerLock {
-    fn drop(&mut self) { let _ = fs::remove_dir(LOCK); }
+    fn drop(&mut self) {
+        let _ = fs::remove_dir(LOCK);
+    }
 }
 
 #[cfg(test)]

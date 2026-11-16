@@ -208,7 +208,10 @@ impl App {
         match worker::read_status() {
             Ok(Some(snapshot)) => self.adopt_status(snapshot),
             Ok(None) => {
-                if self.worker_pid.is_some_and(|pid| !worker::worker_alive(pid)) {
+                if self
+                    .worker_pid
+                    .is_some_and(|pid| !worker::worker_alive(pid))
+                {
                     self.page = Page::Failed;
                     self.error = "Worker exited before publishing its status. Check the worker lock and logs.".into();
                 }
@@ -733,17 +736,31 @@ fn render_menu(frame: &mut Frame, area: Rect, app: &App) {
     if matches!(app.page, Page::Installing | Page::Done | Page::Failed) {
         let completed = app.status.as_ref().map_or(0, |s| s.completed);
         let active = app.status.as_ref().map_or(0, |s| s.phase);
-        let items: Vec<ListItem> = install::PHASES.iter().enumerate().map(|(i, title)| {
-            let number = i + 1;
-            let (marker, color) = if i < completed {
-                ("✓", AQUA)
-            } else if number == active {
-                ("▶", if matches!(app.page, Page::Failed) { RED } else { AMBER })
-            } else {
-                ("·", MUTED)
-            };
-            ListItem::new(Line::styled(format!(" {marker} {number:>2}. {title}"), Style::default().fg(color)))
-        }).collect();
+        let items: Vec<ListItem> = install::PHASES
+            .iter()
+            .enumerate()
+            .map(|(i, title)| {
+                let number = i + 1;
+                let (marker, color) = if i < completed {
+                    ("✓", AQUA)
+                } else if number == active {
+                    (
+                        "▶",
+                        if matches!(app.page, Page::Failed) {
+                            RED
+                        } else {
+                            AMBER
+                        },
+                    )
+                } else {
+                    ("·", MUTED)
+                };
+                ListItem::new(Line::styled(
+                    format!(" {marker} {number:>2}. {title}"),
+                    Style::default().fg(color),
+                ))
+            })
+            .collect();
         frame.render_widget(List::new(items).block(panel("Installation phases")), area);
         return;
     }
@@ -1102,11 +1119,17 @@ fn render_details(frame: &mut Frame, area: Rect, app: &App) {
         Page::Installing => {
             let completed = app.status.as_ref().map_or(0, |s| s.completed);
             let phase = app.status.as_ref().map_or(0, |s| s.phase);
-            let detail = app.status.as_ref().map_or("Starting detached worker", |s| s.detail.as_str());
+            let detail = app
+                .status
+                .as_ref()
+                .map_or("Starting detached worker", |s| s.detail.as_str());
             if app.show_logs {
-                format!("INSTALLATION RUNNING\n\nPhase {phase} / {}  •  {completed} finished\n\
+                format!(
+                    "INSTALLATION RUNNING\n\nPhase {phase} / {}  •  {completed} finished\n\
                     {detail}\n\nLive installation log (last lines):\n\n{}",
-                    install::STEP_COUNT, log_tail(18))
+                    install::STEP_COUNT,
+                    log_tail(18)
+                )
             } else {
                 format!(
                     "INSTALLATION RUNNING\n\n\
@@ -1126,31 +1149,49 @@ fn render_details(frame: &mut Frame, area: Rect, app: &App) {
         }
         Page::Done => {
             if app.show_logs {
-                format!("INSTALLATION COMPLETED\n\n{} / {} phases complete\n\n{}",
-                    install::STEP_COUNT, install::STEP_COUNT, log_tail(18))
+                format!(
+                    "INSTALLATION COMPLETED\n\n{} / {} phases complete\n\n{}",
+                    install::STEP_COUNT,
+                    install::STEP_COUNT,
+                    log_tail(18)
+                )
             } else {
-                format!("INSTALLATION COMPLETED\n\n\
+                format!(
+                    "INSTALLATION COMPLETED\n\n\
                     {} / {} phases completed.\n\n\
                     The installer finished and unmounted its filesystems.\n\
                     Remove the installation medium and reboot.\n\n\
                     Press L to inspect the installation log.\n\
                     Press Enter to configure another installation.\n\n\
                     Log: {}",
-                    install::STEP_COUNT, install::STEP_COUNT, install::LOG)
+                    install::STEP_COUNT,
+                    install::STEP_COUNT,
+                    install::LOG
+                )
             }
         }
         Page::Failed => {
-            let message = app.status.as_ref().and_then(|s| s.error.as_deref())
-                .filter(|s| !s.is_empty()).unwrap_or(&app.error);
+            let message = app
+                .status
+                .as_ref()
+                .and_then(|s| s.error.as_deref())
+                .filter(|s| !s.is_empty())
+                .unwrap_or(&app.error);
             if app.show_logs {
-                format!("INSTALLATION FAILED\n\n{message}\n\nLast log lines:\n\n{}", log_tail(17))
+                format!(
+                    "INSTALLATION FAILED\n\n{message}\n\nLast log lines:\n\n{}",
+                    log_tail(17)
+                )
             } else {
-                format!("INSTALLATION FAILED\n\n{message}\n\n\
+                format!(
+                    "INSTALLATION FAILED\n\n{message}\n\n\
                     The installer attempted to clean up all mounts.\n\
                     Check the log and disk mount state before retrying.\n\n\
                     Press L for the error log or Enter for a new setup.\n\n\
                     Log: {}\nWorker status: {}",
-                    install::LOG, worker::STATUS_PATH)
+                    install::LOG,
+                    worker::STATUS_PATH
+                )
             }
         }
     };
@@ -1195,11 +1236,16 @@ fn render_details(frame: &mut Frame, area: Rect, app: &App) {
             Gauge::default()
                 .block(panel("Progress"))
                 .gauge_style(Style::default().fg(AQUA).bg(PANEL))
-                .ratio((app.status.as_ref().map_or(0, |s| s.completed) as f64
-                    / install::STEP_COUNT as f64).clamp(0.0, 1.0))
-                .label(format!("{} / {} phases completed",
+                .ratio(
+                    (app.status.as_ref().map_or(0, |s| s.completed) as f64
+                        / install::STEP_COUNT as f64)
+                        .clamp(0.0, 1.0),
+                )
+                .label(format!(
+                    "{} / {} phases completed",
                     app.status.as_ref().map_or(0, |s| s.completed),
-                    install::STEP_COUNT)),
+                    install::STEP_COUNT
+                )),
             rows[2],
         );
     }
