@@ -1,8 +1,9 @@
+use serde::{Deserialize, Serialize};
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
 use std::process::Command;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DiskContents {
     NoSignatures,
     ExistingLayout,
@@ -18,7 +19,7 @@ impl DiskContents {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Disk {
     pub path: String,
     pub bytes: u64,

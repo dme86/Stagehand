@@ -10,7 +10,7 @@ A keyboard-first, guided **Gentoo Linux installer written in Rust**. Inspired by
 Stagehand lets you configure an installation in a clean terminal interface,
 review every decision, and install only after explicit confirmation.
 
-> **Early development (v0.4.0).** The installer has not yet passed an end-to-end
+> **Early development (v0.5.0).** The installer has not yet passed an end-to-end
 > UEFI VM boot test. **Do not run it against a disk containing valuable data.**
 > Use a disposable virtual machine until the installation and boot path are validated.
 
@@ -18,7 +18,7 @@ review every decision, and install only after explicit confirmation.
 
 ```text
 ┌ Welcome ────────────────────────────────────────────────────────────────┐
-│ STAGEHAND              Gentoo installer · v0.4.0 · AMD64 / x86_64       │
+│ STAGEHAND              Gentoo installer · v0.5.0 · AMD64 / x86_64       │
 ├ Installation settings ───┬ Details ─────────────────────────────────────┤
 │ › Storage                │ Welcome to Stagehand.                       │
 │     /dev/vda · Btrfs     │                                            │
@@ -147,9 +147,63 @@ Selecting `gentoo-kernel` builds the distribution kernel from source and can be 
 | `r` | Refresh disk list |
 | `Esc` | Return to parent submenu |
 | `q` | Quit from main menu |
+| `L` | Switch between phase progress and live logs during/after installation |
+| `q` / `Esc` (installing) | Detach the TUI **without stopping the installer** |
+| `Enter` (finished/failed) | Return to installer setup |
 
-The progress screen remains open during installation. Individual commands and
-Portage build output can be reviewed in the installation log.
+Once you confirm the full-disk erase, Stagehand starts a **detached installer worker**.
+The TUI only displays its progress, and pressing `L` toggles between completed
+installation phases and the live log. Closing Stagehand with `q` or `Esc`
+**does not stop the worker**. Run Stagehand again in the *same live environment*
+to reattach to the current worker, or inspect its final success/failure result.
+
+The progress gauge counts **completed installation phases out of 12**. A source
+kernel compilation may take a long time, so Stagehand does not invent a
+time-based percentage. Failed commands and cleanup errors remain available
+in the log even after the TUI exits. The worker exits after installation
+success or failure; it is not a permanent daemon.
+
+## Detached installer worker
+
+The installer is split into two parts inside a **single Rust executable**:
+
+- **TUI (ratatui):** collects installation choices, checks confirmation, shows
+  completed phases, and reads worker status and logs. It does not partition or
+  build packages itself.
+- **Worker process:** launched after the typed ERASE confirmation, in a separate
+  Linux session. It survives closing the TUI, performs installation commands,
+  and writes a redacted status snapshot after each phase change.
+
+The configuration, including credentials, is passed **only over a bounded
+anonymous stdin pipe** into the worker. It is never placed into command-line
+arguments, environment variables, status JSON, or installation logs. The TUI
+clears its credential strings after successfully launching the worker.
+
+Worker runtime files:
+
+| File | Purpose |
+| --- | --- |
+| /run/stagehand/status.json | Atomic status snapshot: PID, state, phase, number completed, message or error |
+| /run/stagehand/active.lock | Exclusive worker lock against concurrent installation |
+| /tmp/stagehand-install.log | Full command output, credential stdin redacted |
+
+The worker status directory is accessible only to root. Runtime status is
+**ephemeral** and persists only for the current live boot. A forcibly killed
+worker may leave the lock in place: investigate mounts, mounted chroot
+filesystems and the installation log before manually clearing the lock. A new
+installation never automatically resumes a partially written filesystem.
+
+### Start, detach, reattach
+
+1. Boot the Gentoo live environment and run Stagehand as root.
+2. Complete the installer choices and confirm the selected disk with ERASE.
+3. Watch the phase bar; press L to inspect live command output.
+4. Optionally press q or Esc to leave the TUI; the worker continues.
+5. Run Stagehand again from the same live system to reattach.
+
+Note: a successful Rust build and unit tests do **not** validate the complete
+Gentoo installation/boot process. Only use disposable VM disks until the full
+UEFI install and reboot workflow is verified.
 
 ## Current scope and next milestones
 
@@ -193,7 +247,7 @@ test: use a disposable UEFI QEMU disk before trusting a new configuration.
 
 ## Gentoo Handbook coverage
 
-Stagehand v0.4.0 incorporates additional choices from the official
+Stagehand v0.5.0 incorporates additional choices from the official
 [Gentoo AMD64 Handbook](https://wiki.gentoo.org/wiki/Handbook:AMD64).
 Both AMD64 and ARM64 offer standard and desktop systemd Stage3 archives; desktop
 Stage3 includes extra development tools, **not a preinstalled graphical environment**.

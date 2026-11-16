@@ -1,6 +1,7 @@
 use crate::disks::Disk;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Stage3 {
     Base,
     Desktop,
@@ -19,7 +20,7 @@ impl Stage3 {
         }
     }
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Network {
     Networkd,
     NetworkManager,
@@ -32,7 +33,7 @@ impl Network {
         }
     }
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BuildJobs {
     Auto,
     Two,
@@ -54,7 +55,7 @@ impl BuildJobs {
         }
     }
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Editor {
     None,
     Nano,
@@ -77,7 +78,7 @@ impl Editor {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Filesystem {
     Btrfs,
     Ext4,
@@ -90,7 +91,7 @@ impl Filesystem {
         }
     }
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Swap {
     None,
     FourGiB,
@@ -103,7 +104,7 @@ impl Swap {
         }
     }
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Locale {
     English,
     German,
@@ -119,7 +120,7 @@ impl Locale {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Kernel {
     Binary,
     Source,
@@ -139,7 +140,7 @@ impl Kernel {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Bootloader {
     SystemdBoot,
     Grub,
@@ -153,7 +154,7 @@ impl Bootloader {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Config {
     pub disk: Option<Disk>,
     pub stage3: Stage3,

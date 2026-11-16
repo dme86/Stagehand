@@ -3,7 +3,8 @@ use crate::{
         Bootloader, BuildJobs, Config, Editor, Filesystem, Kernel, Locale, Network, Stage3, Swap,
     },
     disks::{self, Disk},
-    install::{self, Event},
+    install,
+    worker::{self, RunState, RunStatus},
 };
 use anyhow::Result;
 use crossterm::{
@@ -22,7 +23,6 @@ use ratatui::{
 use std::{
     fs::File,
     io::{self, Read, Seek, SeekFrom},
-    sync::mpsc::{self, Receiver},
     time::Duration,
 };
 
@@ -161,14 +161,13 @@ struct App {
     buffer: String,
     pending_password: Option<String>,
     error: String,
-    step: usize,
-    current_step: String,
-    install_error: String,
-    receiver: Option<Receiver<Event>>,
+    status: Option<RunStatus>,
+    worker_pid: Option<u32>,
+    show_logs: bool,
 }
 impl App {
     fn new() -> Self {
-        Self {
+        let mut app = Self {
             config: Config::default(),
             page: Page::Main,
             main_index: 0,
@@ -179,26 +178,44 @@ impl App {
             buffer: String::new(),
             pending_password: None,
             error: String::new(),
-            step: 0,
-            current_step: String::new(),
-            install_error: String::new(),
-            receiver: None,
+            status: None,
+            worker_pid: None,
+            show_logs: false,
+        };
+        // Re-attach to the last worker without requiring saved credentials.
+        if let Ok(Some(snapshot)) = worker::read_status() {
+            app.adopt_status(snapshot);
         }
+        app
+    }
+    fn adopt_status(&mut self, mut snapshot: RunStatus) {
+        self.worker_pid = Some(snapshot.pid);
+        if snapshot.state == RunState::Running && !worker::worker_alive(snapshot.pid) {
+            snapshot.state = RunState::Failed;
+            snapshot.error = Some("Worker stopped unexpectedly. Check the worker lock and disk mounts before retrying.".into());
+        }
+        self.page = match snapshot.state {
+            RunState::Finished => Page::Done,
+            RunState::Failed => Page::Failed,
+            RunState::Running => Page::Installing,
+        };
+        self.status = Some(snapshot);
     }
     fn update(&mut self) {
-        if let Some(receiver) = &self.receiver {
-            while let Ok(event) = receiver.try_recv() {
-                match event {
-                    Event::Step(step, description) => {
-                        self.step = step;
-                        self.current_step = description;
-                    }
-                    Event::Complete(Ok(())) => self.page = Page::Done,
-                    Event::Complete(Err(error)) => {
-                        self.install_error = error;
-                        self.page = Page::Failed;
-                    }
+        if !matches!(self.page, Page::Installing) {
+            return;
+        }
+        match worker::read_status() {
+            Ok(Some(snapshot)) => self.adopt_status(snapshot),
+            Ok(None) => {
+                if self.worker_pid.is_some_and(|pid| !worker::worker_alive(pid)) {
+                    self.page = Page::Failed;
+                    self.error = "Worker exited before publishing its status. Check the worker lock and logs.".into();
                 }
+            }
+            Err(e) => {
+                self.page = Page::Failed;
+                self.error = format!("Cannot read worker status: {e:#}");
             }
         }
     }
@@ -504,13 +521,20 @@ impl App {
                             .unwrap_or("")
                     );
                     if self.buffer == expected {
-                        self.page = Page::Installing;
-                        self.step = 0;
-                        self.current_step = "Starting".into();
-                        self.error.clear();
-                        let (tx, rx) = mpsc::channel();
-                        self.receiver = Some(rx);
-                        install::start(self.config.clone(), tx);
+                        match worker::spawn(&self.config) {
+                            Ok(pid) => {
+                                self.worker_pid = Some(pid);
+                                self.status = None;
+                                self.show_logs = false;
+                                self.page = Page::Installing;
+                                self.error.clear();
+                                self.buffer.clear();
+                                // Credentials no longer needed in the TUI process.
+                                self.config.user_password.clear();
+                                self.config.root_password.clear();
+                            }
+                            Err(e) => self.error = format!("Could not start worker: {e:#}"),
+                        }
                     } else {
                         self.error = format!("Type exactly: {expected}");
                     }
@@ -523,9 +547,20 @@ impl App {
                 }
                 _ => {}
             },
-            Page::Installing => {}
+            Page::Installing => match key.code {
+                KeyCode::Char('l') | KeyCode::Char('L') => self.show_logs = !self.show_logs,
+                KeyCode::Char('q') | KeyCode::Esc => return true,
+                _ => {}
+            },
             Page::Done | Page::Failed => match key.code {
-                KeyCode::Enter | KeyCode::Esc | KeyCode::Char('q') => return true,
+                KeyCode::Char('l') | KeyCode::Char('L') => self.show_logs = !self.show_logs,
+                KeyCode::Enter => {
+                    self.status = None;
+                    self.worker_pid = None;
+                    self.error.clear();
+                    self.page = Page::Main;
+                }
+                KeyCode::Esc | KeyCode::Char('q') => return true,
                 _ => {}
             },
         }
@@ -587,7 +622,7 @@ fn render(frame: &mut Frame, app: &App) {
             Style::default().fg(AMBER).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            "Gentoo installer  ·  v0.4.0  ·  ",
+            "Gentoo installer  ·  v0.5.0  ·  ",
             Style::default().fg(MUTED),
         ),
         Span::styled(arch_label(), Style::default().fg(AQUA)),
@@ -607,8 +642,8 @@ fn render(frame: &mut Frame, app: &App) {
         Page::Pick(_) => " ↑↓ Choose option   Enter Save   Esc Back",
         Page::Edit(_) => " Type value   Enter Save   Esc Cancel",
         Page::Confirm => " Type exact ERASE confirmation   Enter Install   Esc Back",
-        Page::Installing => " Installation running — do not power off",
-        Page::Done | Page::Failed => " Enter / Esc Exit   |   Log: /tmp/stagehand-install.log",
+        Page::Installing => " L: Logs / Steps   q/Esc: Detach UI   Worker keeps running",
+        Page::Done | Page::Failed => " L: Logs / Steps   Enter: New setup   q/Esc: Quit",
     };
     frame.render_widget(
         Paragraph::new(keys)
@@ -695,6 +730,23 @@ fn section_value(app: &App, section: Section, index: usize) -> String {
     }
 }
 fn render_menu(frame: &mut Frame, area: Rect, app: &App) {
+    if matches!(app.page, Page::Installing | Page::Done | Page::Failed) {
+        let completed = app.status.as_ref().map_or(0, |s| s.completed);
+        let active = app.status.as_ref().map_or(0, |s| s.phase);
+        let items: Vec<ListItem> = install::PHASES.iter().enumerate().map(|(i, title)| {
+            let number = i + 1;
+            let (marker, color) = if i < completed {
+                ("✓", AQUA)
+            } else if number == active {
+                ("▶", if matches!(app.page, Page::Failed) { RED } else { AMBER })
+            } else {
+                ("·", MUTED)
+            };
+            ListItem::new(Line::styled(format!(" {marker} {number:>2}. {title}"), Style::default().fg(color)))
+        }).collect();
+        frame.render_widget(List::new(items).block(panel("Installation phases")), area);
+        return;
+    }
     let section = match app.page {
         Page::Section(section) => Some(section),
         Page::Disks => Some(Section::Storage),
@@ -1047,27 +1099,60 @@ fn render_details(frame: &mut Frame, area: Rect, app: &App) {
                 app.buffer,
             )
         }
-        Page::Installing => format!(
-            "Installing Gentoo Linux\n\nStep {} / {}\n\n{}\n\n\
-            Live installation log:\n\n{}",
-            app.step,
-            install::STEP_COUNT,
-            app.current_step,
-            log_tail(13)
-        ),
-        Page::Done => format!(
-            "Installation completed.\n\n\
-            Remove the installation medium and reboot.\n\n\
-            Log: {}\n\n{}",
-            install::LOG,
-            log_tail(10)
-        ),
-        Page::Failed => format!(
-            "Installation stopped.\n\n{}\n\n\
-            Mount cleanup was attempted. Check mount state and logs before retrying.\n\n{}",
-            app.install_error,
-            log_tail(12)
-        ),
+        Page::Installing => {
+            let completed = app.status.as_ref().map_or(0, |s| s.completed);
+            let phase = app.status.as_ref().map_or(0, |s| s.phase);
+            let detail = app.status.as_ref().map_or("Starting detached worker", |s| s.detail.as_str());
+            if app.show_logs {
+                format!("INSTALLATION RUNNING\n\nPhase {phase} / {}  •  {completed} finished\n\
+                    {detail}\n\nLive installation log (last lines):\n\n{}",
+                    install::STEP_COUNT, log_tail(18))
+            } else {
+                format!(
+                    "INSTALLATION RUNNING\n\n\
+                    Current phase: {phase} / {}\n\n\
+                    {detail}\n\n\
+                    {completed} of {} installation phases completed.\n\n\
+                    The installer runs independently from this terminal.\n\
+                    Closing Stagehand does NOT interrupt the installation.\n\n\
+                    Press L to view the live log.\n\
+                    Progress is phase-based, not an estimate of time.\n\n\
+                    Worker status: {}",
+                    install::STEP_COUNT,
+                    install::STEP_COUNT,
+                    worker::STATUS_PATH
+                )
+            }
+        }
+        Page::Done => {
+            if app.show_logs {
+                format!("INSTALLATION COMPLETED\n\n{} / {} phases complete\n\n{}",
+                    install::STEP_COUNT, install::STEP_COUNT, log_tail(18))
+            } else {
+                format!("INSTALLATION COMPLETED\n\n\
+                    {} / {} phases completed.\n\n\
+                    The installer finished and unmounted its filesystems.\n\
+                    Remove the installation medium and reboot.\n\n\
+                    Press L to inspect the installation log.\n\
+                    Press Enter to configure another installation.\n\n\
+                    Log: {}",
+                    install::STEP_COUNT, install::STEP_COUNT, install::LOG)
+            }
+        }
+        Page::Failed => {
+            let message = app.status.as_ref().and_then(|s| s.error.as_deref())
+                .filter(|s| !s.is_empty()).unwrap_or(&app.error);
+            if app.show_logs {
+                format!("INSTALLATION FAILED\n\n{message}\n\nLast log lines:\n\n{}", log_tail(17))
+            } else {
+                format!("INSTALLATION FAILED\n\n{message}\n\n\
+                    The installer attempted to clean up all mounts.\n\
+                    Check the log and disk mount state before retrying.\n\n\
+                    Press L for the error log or Enter for a new setup.\n\n\
+                    Log: {}\nWorker status: {}",
+                    install::LOG, worker::STATUS_PATH)
+            }
+        }
     };
     let title = match app.page {
         Page::Main | Page::Section(_) => "Details",
@@ -1110,7 +1195,11 @@ fn render_details(frame: &mut Frame, area: Rect, app: &App) {
             Gauge::default()
                 .block(panel("Progress"))
                 .gauge_style(Style::default().fg(AQUA).bg(PANEL))
-                .ratio((app.step as f64 / install::STEP_COUNT as f64).clamp(0.0, 1.0)),
+                .ratio((app.status.as_ref().map_or(0, |s| s.completed) as f64
+                    / install::STEP_COUNT as f64).clamp(0.0, 1.0))
+                .label(format!("{} / {} phases completed",
+                    app.status.as_ref().map_or(0, |s| s.completed),
+                    install::STEP_COUNT)),
             rows[2],
         );
     }
