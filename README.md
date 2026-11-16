@@ -10,7 +10,7 @@ A keyboard-first, guided **Gentoo Linux installer written in Rust**. Inspired by
 Stagehand lets you configure an installation in a clean terminal interface,
 review every decision, and install only after explicit confirmation.
 
-> **Early development (v0.5.2).** The installer has not yet passed an end-to-end
+> **Early development (v0.5.3).** The installer has not yet passed an end-to-end
 > UEFI VM boot test. **Do not run it against a disk containing valuable data.**
 > Use a disposable virtual machine until the installation and boot path are validated.
 
@@ -18,7 +18,7 @@ review every decision, and install only after explicit confirmation.
 
 ```text
 ┌ Welcome ────────────────────────────────────────────────────────────────┐
-│ STAGEHAND              Gentoo installer · v0.5.2 · AMD64 / x86_64       │
+│ STAGEHAND              Gentoo installer · v0.5.3 · AMD64 / x86_64       │
 ├ Installation settings ───┬ Details ─────────────────────────────────────┤
 │ › Storage                │ Welcome to Stagehand.                       │
 │     /dev/vda · Btrfs     │                                            │
@@ -163,6 +163,42 @@ time-based percentage. Failed commands and cleanup errors remain available
 in the log even after the TUI exits. The worker exits after installation
 success or failure; it is not a permanent daemon.
 
+## Bootloader verification (v0.5.3)
+
+Stagehand now verifies the **installed EFI boot chain** after setting up
+the bootloader, rather than treating the existence of an entry file as proof.
+
+- **Both bootloaders:** the UEFI removable-media loader must exist at
+  `/boot/EFI/BOOT/BOOTX64.EFI` (AMD64) or `BOOTAA64.EFI` (ARM64).
+  Stagehand checks that it is a real PE/COFF binary for the native
+  architecture. systemd-boot must also have its loader under
+  `/boot/EFI/systemd/`.
+- **systemd-boot:** before emerging the kernel, the installer pins
+  `/etc/kernel/entry-token` to `gentoo` and enables
+  `layout=bls` in `/etc/kernel/install.conf`. This matches
+  `default gentoo-*` in `loader.conf`, even though the machine ID
+  is generated on first boot. After `bootctl install`, Stagehand
+  verifies every matching BLS entry's kernel, initrd(s) and kernel
+  parameters against `/etc/kernel/cmdline`, and calls `bootctl list`
+  inside the target chroot.
+- **GRUB:** after `grub-mkconfig`, the installer runs
+  `grub-script-check`, then inspects the default Linux menu entry.
+  The referenced kernel and matching-version initramfs must exist on
+  the EFI partition. Its `root=UUID=...` must match the real root
+  partition UUID read using `blkid` (or it must use
+  `root=LABEL=ROOT`). Btrfs additionally requires
+  `rootflags=subvol=@`.
+
+Missing files, corrupt EFI signatures, mismatched architectures, incorrect
+root parameters, unsafe EFI paths, or wrong boot defaults now **fail the
+installation explicitly**. Tests exercise valid and invalid files,
+boot entries and UUIDs without touching real disks.
+
+**Limitations:** These are consistency and format checks, not a
+full firmware simulation, Secure Boot signature verification, or
+proof that a hardware-specific initramfs successfully boots. A
+complete QEMU/OVMF install-and-reboot test is still required.
+
 ## Safe initramfs creation from the live ISO
 
 Before installing any kernel, Stagehand writes
@@ -288,7 +324,7 @@ test: use a disposable UEFI QEMU disk before trusting a new configuration.
 
 ## Gentoo Handbook coverage
 
-Stagehand v0.5.2 incorporates additional choices from the official
+Stagehand v0.5.3 incorporates additional choices from the official
 [Gentoo AMD64 Handbook](https://wiki.gentoo.org/wiki/Handbook:AMD64).
 Both AMD64 and ARM64 offer standard and desktop systemd Stage3 archives; desktop
 Stage3 includes extra development tools, **not a preinstalled graphical environment**.
