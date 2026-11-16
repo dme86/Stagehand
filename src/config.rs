@@ -346,7 +346,10 @@ mod tests {
     #[test]
     fn accept_common_settings() {
         assert_eq!(Stage3::Base.archive_prefix("amd64"), "stage3-amd64-systemd");
-        assert_eq!(Stage3::Desktop.archive_prefix("arm64"), "stage3-arm64-desktop-systemd");
+        assert_eq!(
+            Stage3::Desktop.archive_prefix("arm64"),
+            "stage3-arm64-desktop-systemd"
+        );
         assert_eq!(BuildJobs::Auto.makeopts(), None);
         assert_eq!(BuildJobs::Four.makeopts(), Some("-j4"));
         assert_eq!(Editor::Nano.package(), Some("app-editors/nano"));

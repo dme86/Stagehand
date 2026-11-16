@@ -167,8 +167,12 @@ fn install(c: &Config, tx: &Sender<Event>) -> Result<()> {
     if c.network == Network::NetworkManager {
         packages.push("net-misc/networkmanager");
     }
-    if c.cronie { packages.push("sys-process/cronie"); }
-    if let Some(editor) = c.editor.package() { packages.push(editor); }
+    if c.cronie {
+        packages.push("sys-process/cronie");
+    }
+    if let Some(editor) = c.editor.package() {
+        packages.push(editor);
+    }
     inside(&packages)?;
     inside(&["/usr/bin/env", "locale-gen"])?;
 
@@ -558,8 +562,10 @@ fn configure(c: &Config) -> Result<()> {
             "[Match]\nName=en* eth*\n\n[Network]\nDHCP=yes\n",
         )?,
         Network::NetworkManager => {
-            write("etc/NetworkManager/conf.d/10-stagehand.conf",
-                "[main]\ndns=systemd-resolved\n")?;
+            write(
+                "etc/NetworkManager/conf.d/10-stagehand.conf",
+                "[main]\ndns=systemd-resolved\n",
+            )?;
         }
     }
     let boot_use = match c.bootloader {
@@ -671,17 +677,27 @@ mod tests {
     #[test]
     fn index_parsing() {
         assert_eq!(
-            parse_name("stage3-amd64-systemd-20261116.tar.xz 123\n", "stage3-amd64-systemd").unwrap(),
+            parse_name(
+                "stage3-amd64-systemd-20261116.tar.xz 123\n",
+                "stage3-amd64-systemd"
+            )
+            .unwrap(),
             "stage3-amd64-systemd-20261116.tar.xz"
         );
         assert!(parse_name("../bad 42", "stage3-amd64-systemd").is_err());
         assert_eq!(
-            parse_name("stage3-arm64-desktop-systemd-20261115T230104Z.tar.xz 100\n",
-                "stage3-arm64-desktop-systemd").unwrap(),
+            parse_name(
+                "stage3-arm64-desktop-systemd-20261115T230104Z.tar.xz 100\n",
+                "stage3-arm64-desktop-systemd"
+            )
+            .unwrap(),
             "stage3-arm64-desktop-systemd-20261115T230104Z.tar.xz"
         );
-        assert!(parse_name("stage3-arm64-systemd-20261115.tar.xz 100\n",
-            "stage3-arm64-desktop-systemd").is_err());
+        assert!(parse_name(
+            "stage3-arm64-systemd-20261115.tar.xz 100\n",
+            "stage3-arm64-desktop-systemd"
+        )
+        .is_err());
     }
     #[test]
     fn checksum_is_bound_to_archive_name() {

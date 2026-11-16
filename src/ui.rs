@@ -1,5 +1,7 @@
 use crate::{
-    config::{Bootloader, BuildJobs, Config, Editor, Filesystem, Kernel, Locale, Network, Stage3, Swap},
+    config::{
+        Bootloader, BuildJobs, Config, Editor, Filesystem, Kernel, Locale, Network, Stage3, Swap,
+    },
     disks::{self, Disk},
     install::{self, Event},
 };
@@ -57,7 +59,13 @@ impl Section {
     fn entries(self) -> &'static [&'static str] {
         match self {
             Self::Storage => &["Installation disk", "Root filesystem", "Swap"],
-            Self::System => &["Hostname", "Timezone", "Console keymap", "System locale", "Stage3 type"],
+            Self::System => &[
+                "Hostname",
+                "Timezone",
+                "Console keymap",
+                "System locale",
+                "Stage3 type",
+            ],
             Self::Boot => &["Kernel", "Bootloader"],
             Self::Network => &["Network manager", "SSH service", "SSH public key"],
             Self::Users => &["Username", "User password", "Root password"],
@@ -426,18 +434,34 @@ impl App {
                                 _ => Locale::Utf8,
                             }
                         }
-                        Choice::Stage3 => self.config.stage3 = if self.choice_index == 0 {
-                            Stage3::Base
-                        } else { Stage3::Desktop },
-                        Choice::Network => self.config.network = if self.choice_index == 0 {
-                            Network::Networkd
-                        } else { Network::NetworkManager },
-                        Choice::BuildJobs => self.config.build_jobs = match self.choice_index {
-                            0 => BuildJobs::Auto, 1 => BuildJobs::Two, _ => BuildJobs::Four,
-                        },
-                        Choice::Editor => self.config.editor = match self.choice_index {
-                            0 => Editor::None, 1 => Editor::Nano, _ => Editor::Vim,
-                        },
+                        Choice::Stage3 => {
+                            self.config.stage3 = if self.choice_index == 0 {
+                                Stage3::Base
+                            } else {
+                                Stage3::Desktop
+                            }
+                        }
+                        Choice::Network => {
+                            self.config.network = if self.choice_index == 0 {
+                                Network::Networkd
+                            } else {
+                                Network::NetworkManager
+                            }
+                        }
+                        Choice::BuildJobs => {
+                            self.config.build_jobs = match self.choice_index {
+                                0 => BuildJobs::Auto,
+                                1 => BuildJobs::Two,
+                                _ => BuildJobs::Four,
+                            }
+                        }
+                        Choice::Editor => {
+                            self.config.editor = match self.choice_index {
+                                0 => Editor::None,
+                                1 => Editor::Nano,
+                                _ => Editor::Vim,
+                            }
+                        }
                     }
                     self.page = Page::Section(choice.section());
                     self.error.clear();
@@ -661,7 +685,12 @@ fn section_value(app: &App, section: Section, index: usize) -> String {
         .into(),
         (Section::Portage, 1) => app.config.build_jobs.label().into(),
         (Section::Tools, 0) => app.config.editor.label().into(),
-        (Section::Tools, 1) => if app.config.cronie { "cronie enabled" } else { "Disabled" }.into(),
+        (Section::Tools, 1) => if app.config.cronie {
+            "cronie enabled"
+        } else {
+            "Disabled"
+        }
+        .into(),
         _ => String::new(),
     }
 }
@@ -730,7 +759,10 @@ fn render_menu(frame: &mut Frame, area: Rect, app: &App) {
                         }
                         .into(),
                     ),
-                    ("System tools".into(), format!("Editor: {}", app.config.editor.label())),
+                    (
+                        "System tools".into(),
+                        format!("Editor: {}", app.config.editor.label()),
+                    ),
                     ("Install Gentoo".into(), "Review & install".into()),
                 ],
                 app.main_index,
@@ -899,9 +931,24 @@ fn render_details(frame: &mut Frame, area: Rect, app: &App) {
                     "System locale",
                     &["en_US.UTF-8 (default)", "de_DE.UTF-8", "C.UTF-8"],
                 ),
-                Choice::Stage3 => ("Stage3 image", &["Base systemd (default)", "Desktop systemd (includes extra development packages)"]),
-                Choice::Network => ("Network manager", &["systemd-networkd (wired DHCP)", "NetworkManager (Ethernet/Wi-Fi)"]),
-                Choice::BuildJobs => ("Parallel builds", &["Automatic (default)", "2 jobs", "4 jobs"]),
+                Choice::Stage3 => (
+                    "Stage3 image",
+                    &[
+                        "Base systemd (default)",
+                        "Desktop systemd (includes extra development packages)",
+                    ],
+                ),
+                Choice::Network => (
+                    "Network manager",
+                    &[
+                        "systemd-networkd (wired DHCP)",
+                        "NetworkManager (Ethernet/Wi-Fi)",
+                    ],
+                ),
+                Choice::BuildJobs => (
+                    "Parallel builds",
+                    &["Automatic (default)", "2 jobs", "4 jobs"],
+                ),
                 Choice::Editor => ("Console editor", &["None", "nano (default)", "vim"]),
             };
             let options = options
@@ -980,11 +1027,23 @@ fn render_details(frame: &mut Frame, area: Rect, app: &App) {
                 app.config.keymap,
                 app.config.network.label(),
                 app.config.build_jobs.label(),
-                if app.config.binary_packages { "Binary preferred" } else { "Source builds" },
+                if app.config.binary_packages {
+                    "Binary preferred"
+                } else {
+                    "Source builds"
+                },
                 app.config.editor.label(),
-                if app.config.cronie { "cronie enabled" } else { "Disabled" },
+                if app.config.cronie {
+                    "cronie enabled"
+                } else {
+                    "Disabled"
+                },
                 app.config.username,
-                if app.config.ssh_enabled { "Key-only" } else { "Disabled" },
+                if app.config.ssh_enabled {
+                    "Key-only"
+                } else {
+                    "Disabled"
+                },
                 app.buffer,
             )
         }
