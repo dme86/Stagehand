@@ -10,7 +10,7 @@ A keyboard-first, guided **Gentoo Linux installer written in Rust**. Inspired by
 Stagehand lets you configure an installation in a clean terminal interface,
 review every decision, and install only after explicit confirmation.
 
-> **Early development (v0.2.0).** The installer has not yet passed an end-to-end
+> **Early development (v0.3.0).** The installer has not yet passed an end-to-end
 > UEFI VM boot test. **Do not run it against a disk containing valuable data.**
 > Use a disposable virtual machine until the installation and boot path are validated.
 
@@ -36,7 +36,7 @@ review every decision, and install only after explicit confirmation.
 └───────────────────────────────────────────────────────────────────────┘
 ```
 
-The main menu is organized into **Storage**, **System**, **Kernel & boot**, **Network** and **Users** submenus, plus a separate final installation action.
+The main menu is organized into **Storage**, **System**, **Kernel & boot**, **Network**, **Users** and **Portage** submenus, plus a separate final installation action.
 
 The interface uses **ratatui + crossterm** with a compact Gruvbox-inspired color
 scheme. It runs entirely in the terminal and does not require Python, Ansible,
@@ -45,8 +45,10 @@ a graphical environment, or a desktop environment.
 ### What you configure
 
 - Target disk with a non-destructive inspection of partition tables and filesystem signatures. Existing data is clearly marked; mounted, read-only and removable disks are unavailable.
-- Hostname, timezone and console keymap.
-- Kernel package and bootloader in a dedicated **Kernel & boot** submenu.
+- Hostname, timezone, console keymap and a UTF-8 system locale.
+- Kernel package and bootloader in the **Kernel & boot** submenu.
+- Filesystem: Btrfs (default) or ext4; optional 4 GiB swap partition (minimum 16 GiB target).
+- Portage: prefer binary packages (default) or compile from source.
 - Local administrator account and root credentials, with password confirmation.
 - Optional SSH with public-key authentication (password SSH and root SSH disabled).
 - Final installation review and a mandatory typed `ERASE /dev/...` confirmation.
@@ -60,14 +62,14 @@ The initial installation profile follows the base system from
 | --- | --- |
 | Architecture | Native amd64 or arm64 |
 | Init | systemd stage3 |
-| Partitioning | GPT, 512 MiB FAT32 ESP, remaining space Btrfs |
+| Partitioning | GPT, 512 MiB FAT32 ESP, optional 4 GiB swap, remaining space for root |
 | Subvolumes | `@` mounted at `/`, `@home` at `/home` |
-| Filesystem | Btrfs with zstd compression |
+| Filesystem | Btrfs with zstd compression (default) or ext4 |
 | Kernel | `gentoo-kernel-bin` (default) or `gentoo-kernel` (source build) |
 | Bootloader | systemd-boot (default) or GRUB, UEFI |
 | Networking | systemd-networkd, DHCP on wired interfaces |
-| Package management | Portage, binary packages preferred |
-| Console | Configurable keymap; English base system messages |
+| Package management | Portage, binary packages preferred by default, source-only optional |
+| Console and locale | Configurable keymap; en_US.UTF-8 (default), de_DE.UTF-8 or C.UTF-8 |
 
 Stagehand detects its **native live-system architecture** at runtime (`x86_64` → `amd64`, `aarch64` → `arm64`) and downloads only the corresponding systemd stage3. No Gentoo ISO download is necessary: boot a Linux live system first. Cross-architecture installations are intentionally unsupported.
 
@@ -100,6 +102,7 @@ supported, even on an ARM Mac.
 The live environment needs UEFI boot, a working network connection, and:
 `lsblk`, `swapon`, `parted`, `udevadm`, `mkfs.vfat`, `mkfs.btrfs`,
 `btrfs`, `mount`, `umount`, `chroot`, `tar`, `curl`, `wipefs`, and `sync`.
+`mkfs.ext4` and `mkswap` are additionally required when those options are selected.
 The chosen disk must have at least 8 GiB; a larger disk is strongly
 recommended for Portage. Stagehand refuses mounted, read-only and removable target disks, and checks active swap.
 Its disk inspection distinguishes **known signatures / partitions**, **no known signatures**, and **unknown**. No-signature detection does not guarantee an empty disk; full-disk erasure always requires explicit confirmation.
@@ -117,11 +120,12 @@ Stagehand does **not** download or create a live ISO. It is a Linux binary desig
 
 The left-hand main menu deliberately stays small:
 
-- **Storage** — choose a target disk, see its size, model and known data/partition status.
-- **System** — hostname, timezone, console keymap.
+- **Storage** — installation disk, Btrfs/ext4 filesystem and optional 4 GiB swap.
+- **System** — hostname, timezone, keymap and UTF-8 locale.
 - **Kernel & boot** — `gentoo-kernel-bin` or `gentoo-kernel`; systemd-boot or GRUB (UEFI).
 - **Network** — wired DHCP, optional key-only SSH and public key.
 - **Users** — administrator name/password and root password.
+- **Portage** — binary packages preferred or builds from source.
 - **Install Gentoo** — full summary and typed `ERASE /dev/...` confirmation.
 
 Selecting `gentoo-kernel` builds the distribution kernel from source and can be slower, while `gentoo-kernel-bin` is recommended for a first installation. Stagehand configures `sys-kernel/installkernel` USE flags to match the chosen bootloader and verifies boot artifacts before reporting success.
@@ -148,7 +152,7 @@ Gentoo installer. In particular:
 - UEFI only; no BIOS/legacy boot.
 - Whole-disk installs only; no partition preservation, LUKS or dual-boot.
 - Wired DHCP only; Wi-Fi and advanced network setup are not yet configured.
-- Fixed systemd + Btrfs filesystem profile. Kernel and UEFI bootloader are selectable.
+- systemd/UEFI only; Btrfs/ext4, kernel, swap and UEFI bootloader are selectable.
 - No automated integration test booting the resulting disk yet.
 - Re-running the installation is destructive; no resume support.
 - SHA-256 validation protects downloaded archives against accidental corruption,
@@ -156,8 +160,28 @@ Gentoo installer. In particular:
 - Kernel and bootloader combinations need to be verified on real UEFI VMs.
 
 Roadmap: automated QEMU boot testing, signed artifact verification, additional
-filesystem and init profiles, locale and network configuration, package
+init profiles, advanced locale and network configuration, package
 selection, disk encryption and optional Anvil + rst desktop integration.
+
+## Comparison with gentoo-ansible
+
+The base installer follows the systemd/UEFI profile in
+[gentoo-ansible/install.yml](https://github.com/dme86/gentoo-ansible/blob/main/install.yml).
+Stagehand additionally configures `/etc/hosts`, a fresh first-boot `/etc/machine-id`,
+`locale.gen`, `locale.conf` and the selected UTF-8 locale using `locale-gen`.
+The Gentoo Stage3's existing Portage profile and binhost settings are retained.
+
+The Ansible installer is dedicated to a QEMU guest and enables key-only **root SSH**
+for remote VM administration. Stagehand intentionally requires explicit disk
+selection and uses key-only SSH for the named administrator; root SSH is disabled.
+
+The separate `post_install.yml` installs a personalized Anvil/rst/greetd graphical
+desktop and is not a requirement for a functional Gentoo base installation.
+
+OpenRC, custom Portage profiles/USE flags, advanced partitioning, LUKS,
+Secure Boot, Wi-Fi, static IP configuration and opt-in desktop installation remain
+outside the supported profile. Rust CI is not a substitute for a real boot
+test: use a disposable UEFI QEMU disk before trusting a new configuration.
 
 ## Development
 

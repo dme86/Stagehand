@@ -1,5 +1,5 @@
 use crate::{
-    config::{Bootloader, Config, Kernel},
+    config::{Bootloader, Config, Filesystem, Kernel, Locale, Swap},
     disks::{self, Disk},
     install::{self, Event},
 };
@@ -39,6 +39,7 @@ enum Section {
     Boot,
     Network,
     Users,
+    Portage,
 }
 impl Section {
     fn title(self) -> &'static str {
@@ -48,15 +49,17 @@ impl Section {
             Self::Boot => "Kernel & boot",
             Self::Network => "Network",
             Self::Users => "Users",
+            Self::Portage => "Portage",
         }
     }
     fn entries(self) -> &'static [&'static str] {
         match self {
-            Self::Storage => &["Installation disk"],
-            Self::System => &["Hostname", "Timezone", "Console keymap"],
+            Self::Storage => &["Installation disk", "Root filesystem", "Swap"],
+            Self::System => &["Hostname", "Timezone", "Console keymap", "System locale"],
             Self::Boot => &["Kernel", "Bootloader"],
             Self::Network => &["SSH service", "SSH public key"],
             Self::Users => &["Username", "User password", "Root password"],
+            Self::Portage => &["Binary packages"],
         }
     }
 }
@@ -97,6 +100,24 @@ impl Field {
 enum Choice {
     Kernel,
     Bootloader,
+    Filesystem,
+    Swap,
+    Locale,
+}
+impl Choice {
+    fn section(self) -> Section {
+        match self {
+            Self::Filesystem | Self::Swap => Section::Storage,
+            Self::Locale => Section::System,
+            Self::Kernel | Self::Bootloader => Section::Boot,
+        }
+    }
+    fn count(self) -> usize {
+        match self {
+            Self::Locale => 3,
+            _ => 2,
+        }
+    }
 }
 #[derive(Clone, Copy)]
 enum Page {
@@ -196,6 +217,13 @@ impl App {
         self.choice_index = match choice {
             Choice::Kernel => usize::from(self.config.kernel == Kernel::Source),
             Choice::Bootloader => usize::from(self.config.bootloader == Bootloader::Grub),
+            Choice::Filesystem => usize::from(self.config.filesystem == Filesystem::Ext4),
+            Choice::Swap => usize::from(self.config.swap == Swap::FourGiB),
+            Choice::Locale => match self.config.locale {
+                Locale::English => 0,
+                Locale::German => 1,
+                Locale::Utf8 => 2,
+            },
         };
         self.page = Page::Pick(choice);
         self.error.clear();
@@ -204,9 +232,12 @@ impl App {
         self.error.clear();
         match (section, self.section_index) {
             (Section::Storage, 0) => self.open_disks(),
+            (Section::Storage, 1) => self.pick(Choice::Filesystem),
+            (Section::Storage, 2) => self.pick(Choice::Swap),
             (Section::System, 0) => self.edit(Field::Hostname),
             (Section::System, 1) => self.edit(Field::Timezone),
             (Section::System, 2) => self.edit(Field::Keymap),
+            (Section::System, 3) => self.pick(Choice::Locale),
             (Section::Boot, 0) => self.pick(Choice::Kernel),
             (Section::Boot, 1) => self.pick(Choice::Bootloader),
             (Section::Network, 0) => self.config.ssh_enabled = !self.config.ssh_enabled,
@@ -214,6 +245,7 @@ impl App {
             (Section::Users, 0) => self.edit(Field::Username),
             (Section::Users, 1) => self.edit(Field::UserPassword),
             (Section::Users, 2) => self.edit(Field::RootPassword),
+            (Section::Portage, 0) => self.config.binary_packages = !self.config.binary_packages,
             _ => {}
         }
     }
@@ -257,10 +289,10 @@ impl App {
                     self.main_index = self.main_index.saturating_sub(1)
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
-                    self.main_index = (self.main_index + 1).min(5)
+                    self.main_index = (self.main_index + 1).min(6)
                 }
                 KeyCode::Home => self.main_index = 0,
-                KeyCode::End => self.main_index = 5,
+                KeyCode::End => self.main_index = 6,
                 KeyCode::Enter | KeyCode::Right | KeyCode::Char(' ') => {
                     let section = match self.main_index {
                         0 => Some(Section::Storage),
@@ -268,6 +300,7 @@ impl App {
                         2 => Some(Section::Boot),
                         3 => Some(Section::Network),
                         4 => Some(Section::Users),
+                        5 => Some(Section::Portage),
                         _ => None,
                     };
                     if let Some(section) = section {
@@ -321,9 +354,12 @@ impl App {
                 _ => {}
             },
             Page::Pick(choice) => match key.code {
-                KeyCode::Esc | KeyCode::Left => self.page = Page::Section(Section::Boot),
-                KeyCode::Up | KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('k') => {
-                    self.choice_index = 1 - self.choice_index;
+                KeyCode::Esc | KeyCode::Left => self.page = Page::Section(choice.section()),
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.choice_index = self.choice_index.saturating_sub(1);
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    self.choice_index = (self.choice_index + 1).min(choice.count() - 1);
                 }
                 KeyCode::Enter | KeyCode::Right => {
                     match choice {
@@ -341,8 +377,29 @@ impl App {
                                 Bootloader::Grub
                             }
                         }
+                        Choice::Filesystem => {
+                            self.config.filesystem = if self.choice_index == 0 {
+                                Filesystem::Btrfs
+                            } else {
+                                Filesystem::Ext4
+                            }
+                        }
+                        Choice::Swap => {
+                            self.config.swap = if self.choice_index == 0 {
+                                Swap::None
+                            } else {
+                                Swap::FourGiB
+                            }
+                        }
+                        Choice::Locale => {
+                            self.config.locale = match self.choice_index {
+                                0 => Locale::English,
+                                1 => Locale::German,
+                                _ => Locale::Utf8,
+                            }
+                        }
                     }
-                    self.page = Page::Section(Section::Boot);
+                    self.page = Page::Section(choice.section());
                     self.error.clear();
                 }
                 _ => {}
@@ -515,9 +572,12 @@ fn disk_label(app: &App) -> String {
 fn section_value(app: &App, section: Section, index: usize) -> String {
     match (section, index) {
         (Section::Storage, 0) => disk_label(app),
+        (Section::Storage, 1) => app.config.filesystem.label().into(),
+        (Section::Storage, 2) => app.config.swap.label().into(),
         (Section::System, 0) => app.config.hostname.clone(),
         (Section::System, 1) => app.config.timezone.clone(),
         (Section::System, 2) => app.config.keymap.clone(),
+        (Section::System, 3) => app.config.locale.label().into(),
         (Section::Boot, 0) => app.config.kernel.label().into(),
         (Section::Boot, 1) => app.config.bootloader.label().into(),
         (Section::Network, 0) => if app.config.ssh_enabled {
@@ -551,6 +611,12 @@ fn section_value(app: &App, section: Section, index: usize) -> String {
             "Configured"
         }
         .into(),
+        (Section::Portage, 0) => if app.config.binary_packages {
+            "Prefer binary packages"
+        } else {
+            "Compile from source"
+        }
+        .into(),
         _ => String::new(),
     }
 }
@@ -558,7 +624,7 @@ fn render_menu(frame: &mut Frame, area: Rect, app: &App) {
     let section = match app.page {
         Page::Section(section) => Some(section),
         Page::Disks => Some(Section::Storage),
-        Page::Pick(_) => Some(Section::Boot),
+        Page::Pick(choice) => Some(choice.section()),
         Page::Edit(field) => Some(field.section()),
         _ => None,
     };
@@ -610,6 +676,15 @@ fn render_menu(frame: &mut Frame, area: Rect, app: &App) {
                             app.config.username.clone()
                         },
                     ),
+                    (
+                        "Portage".into(),
+                        if app.config.binary_packages {
+                            "Binary packages preferred"
+                        } else {
+                            "Source builds"
+                        }
+                        .into(),
+                    ),
                     ("Install Gentoo".into(), "Review & install".into()),
                 ],
                 app.main_index,
@@ -620,7 +695,7 @@ fn render_menu(frame: &mut Frame, area: Rect, app: &App) {
         .iter()
         .enumerate()
         .map(|(i, (name, value))| {
-            let special = section.is_none() && i == 5;
+            let special = section.is_none() && i == 6;
             let marker = if special { "▶" } else { "›" };
             ListItem::new(vec![
                 Line::styled(
@@ -645,10 +720,11 @@ fn render_details(frame: &mut Frame, area: Rect, app: &App) {
         Page::Main => {
             let summary = match app.main_index {
                 0 => "Choose a disk. Stagehand checks existing partition tables and known filesystem signatures without modifying data.",
-                1 => "Configure hostname, timezone and console keymap.",
+                1 => "Configure hostname, timezone, console keymap and system locale.",
                 2 => "Choose the Gentoo kernel package and an EFI bootloader. Both choices affect the actual installation.",
                 3 => "Wired DHCP is enabled by default. SSH is optional and requires an authorized public key.",
                 4 => "Set a local administrator account and root credentials.",
+                5 => "Choose binary package preference for Portage. The shipped Gentoo stage3 binhost is retained.",
                 _ => "Review every choice, then explicitly authorize installation on the selected disk.",
             };
             format!(
@@ -658,22 +734,33 @@ fn render_details(frame: &mut Frame, area: Rect, app: &App) {
                 • Official Gentoo systemd stage3 (auto-selected)\n\
                 • Kernel: {}\n\
                 • Bootloader: {}\n\
-                • GPT / UEFI, Btrfs @ and @home (zstd)\n\
+                • GPT / UEFI, filesystem: {}\n\
+                • Swap: {}\n\
+                • Locale: {}\n\
                 • Wired DHCP via systemd-networkd\n\n\
                 Enter a category to configure its options.\n\
                 Nothing is written to a disk until final confirmation.",
                 arch_label(),
                 app.config.kernel.label(),
-                app.config.bootloader.label()
+                app.config.bootloader.label(),
+                app.config.filesystem.label(),
+                app.config.swap.label(),
+                app.config.locale.label()
             )
         }
         Page::Section(section) => {
             let help = match (section, app.section_index) {
+                (Section::Storage, 0) =>
+                    "Inspect disk capacity, partition tables and filesystem signatures. Existing data is clearly marked; erasure requires explicit confirmation.",
+                (Section::Storage, 1) =>
+                    "Btrfs with zstd and subvolumes @ / @home (default), or ext4 as a single root filesystem.",
                 (Section::Storage, _) =>
-                    "Inspect disk capacity, partition tables and filesystem signatures. A disk with existing data is clearly marked and still requires explicit ERASE confirmation.",
+                    "No swap by default. Optionally create a dedicated 4 GiB swap partition. Requires at least a 16 GiB installation disk.",
                 (Section::System, 0) => "Choose the installed system's hostname.",
                 (Section::System, 1) => "Select an IANA timezone, e.g. Europe/Berlin.",
-                (Section::System, _) => "Choose a supported Linux console keymap, e.g. de or us.",
+                (Section::System, 2) => "Choose a Linux console keymap, e.g. de or us.",
+                (Section::System, _) =>
+                    "Choose a UTF-8 system locale: en_US, de_DE or C.UTF-8. Stagehand generates the selected locale.",
                 (Section::Boot, 0) =>
                     "Binary: gentoo-kernel-bin is fast to install (default).\n\nSource: gentoo-kernel builds on the target and may take significantly longer.",
                 (Section::Boot, _) =>
@@ -685,6 +772,7 @@ fn render_details(frame: &mut Frame, area: Rect, app: &App) {
                 (Section::Users, 0) => "Set the name of the local administrator.",
                 (Section::Users, 1) => "The administrator joins wheel with sudo permission.",
                 (Section::Users, _) => "Set a separate root password.",
+                (Section::Portage, _) => "Prefer Gentoo binary packages (default), or compile packages from source. The stage3 Portage configuration and binhost are preserved.",
             };
             format!(
                 "{} / {}\n\n{}\n\nCurrent value:\n{}\n\n\
@@ -730,25 +818,41 @@ fn render_details(frame: &mut Frame, area: Rect, app: &App) {
             }
         }
         Page::Pick(choice) => {
-            let (title, values) = match choice {
+            let (title, options): (&str, &[&str]) = match choice {
                 Choice::Kernel => (
-                    "Kernel package",
-                    [
-                        "gentoo-kernel-bin (prebuilt, default)",
-                        "gentoo-kernel (source build)",
+                    "Kernel",
+                    &[
+                        "gentoo-kernel-bin (default)",
+                        "gentoo-kernel (build from source)",
                     ],
                 ),
-                Choice::Bootloader => ("UEFI bootloader", ["systemd-boot (default)", "GRUB"]),
+                Choice::Bootloader => ("UEFI bootloader", &["systemd-boot (default)", "GRUB"]),
+                Choice::Filesystem => (
+                    "Root filesystem",
+                    &["Btrfs (zstd, @ / @home)", "ext4 (single root)"],
+                ),
+                Choice::Swap => (
+                    "Swap configuration",
+                    &["No swap (default)", "4 GiB swap partition"],
+                ),
+                Choice::Locale => (
+                    "System locale",
+                    &["en_US.UTF-8 (default)", "de_DE.UTF-8", "C.UTF-8"],
+                ),
             };
-            format!(
-                "{title}\n\n{}  {}\n{}  {}\n\n\
-                Use Up/Down and Enter to select.\n\
-                This selection will be used by the installer.",
-                if app.choice_index == 0 { "›" } else { " " },
-                values[0],
-                if app.choice_index == 1 { "›" } else { " " },
-                values[1]
-            )
+            let options = options
+                .iter()
+                .enumerate()
+                .map(|(i, value)| {
+                    format!(
+                        "{}  {}",
+                        if i == app.choice_index { "›" } else { " " },
+                        value
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            format!("{title}\n\n{options}\n\nUse arrows and Enter to choose.")
         }
         Page::Edit(field) => {
             let value = if field.secret() {
@@ -780,24 +884,36 @@ fn render_details(frame: &mut Frame, area: Rect, app: &App) {
             format!(
                 "FINAL REVIEW\n\n\
                 Architecture: {}\n\
-                Stage3:       Gentoo systemd / auto-selected\n\
+                Stage3:       systemd (native architecture)\n\
                 Target disk:  {path} ({size})\n\
                 Disk state:   {contents}\n\
+                Filesystem:   {}\n\
+                Swap:         {}\n\
                 Kernel:       {}\n\
                 Bootloader:   {}\n\
                 Hostname:     {}\n\
                 Timezone:     {}\n\
+                Locale:       {}\n\
                 Keymap:       {}\n\
+                Portage:      {}\n\
                 User:         {}\n\
                 SSH:          {}\n\n\
                 WARNING: All data on {path} will be destroyed!\n\
                 Type: ERASE {path}\n\n> {}█",
                 arch_label(),
+                app.config.filesystem.label(),
+                app.config.swap.label(),
                 app.config.kernel.label(),
                 app.config.bootloader.label(),
                 app.config.hostname,
                 app.config.timezone,
+                app.config.locale.label(),
                 app.config.keymap,
+                if app.config.binary_packages {
+                    "Binary preferred"
+                } else {
+                    "Source builds"
+                },
                 app.config.username,
                 if app.config.ssh_enabled {
                     "Key-only"
