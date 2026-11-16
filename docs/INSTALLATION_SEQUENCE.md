@@ -14,14 +14,14 @@ in a worker process after the typed disk erase confirmation.
 | 1. Preflight | Live ISO | Validate root, UEFI, architecture, dependencies, selected device, swap usage, and empty mount target |
 | 2. Fetch Stage3 | Live ISO | Select the systemd base/desktop Stage3 for native amd64/arm64; download and verify its SHA-256 **before any disk writes** |
 | 3. Partition | Live ISO | Recheck the disk state just before the destructive boundary; create GPT, ESP, root, and optionally swap |
-| 4. Format/mount | Live ISO | Format partitions, mount root and Btrfs subvolumes if selected, mount ESP on `/mnt/stagehand/boot` **before installing any kernel** |
+| 4. Format/mount | Live ISO | Format partitions, mount root and Btrfs subvolumes if selected, mount ESP on `/mnt/stagehand/boot` **before installing any kernel**; probe and validate fresh filesystem UUIDs of root, ESP, and optional swap |
 | 5. Extract Stage3 | Live ISO | Extract with tar permissions, xattrs and numeric ownership preserved |
-| 6. Initial configuration | Live ISO, writing into installed root | Create `fstab`, `hostname`, `hosts`, timezone, locale, console keymap, network config, `/etc/kernel/cmdline`, installkernel USE flags, firmware license and Portage settings; copy live DNS resolver for chroot |
+| 6. Initial configuration | Live ISO, writing into installed root | Create UUID-addressed `fstab`, `hostname`, `hosts`, timezone, locale, console keymap, network config, UUID-addressed `/etc/kernel/cmdline`, installkernel USE flags, firmware license and Portage settings; copy live DNS resolver for chroot |
 | 7. Prepare chroot | Live ISO | Mount proc, rbind sys and dev with slave propagation, bind run; verify **all required mountpoints** (including root, ESP and Btrfs home), Stage3 identity, `fstab`, Portage config and DNS; run **`env-update` inside chroot** |
 | 8. Repository | Gentoo chroot, login shell | Source **`/etc/profile`** (after env-update); run `emerge-webrsync` |
 | 9. Packages/kernel | Gentoo chroot, login shell | **First update `sys-apps/systemd` with the `boot` USE flag for systemd-boot**, then install/update `sys-kernel/installkernel` and GRUB (if selected) with `--newuse`; **only then** install Btrfs tools in a dedicated transaction when selected; install Dracut and firmware; verify /usr/bin/btrfs in the target chroot for Btrfs roots; install the distribution kernel separately; validate the initramfs with lsinitrd; generate locales |
 | 10. Users | Gentoo chroot | Set credentials through stdin, create administrator, validate sudoers, optionally configure key-only SSH |
-| 11. Services/boot | Gentoo chroot | Enable selected system services; switch installed resolver to systemd-resolved; **recheck ESP mounts**; install EFI bootloader and verify BLS default, kernel/initramfs/root parameters, architecture-correct EFI files, or GRUB's default kernel entry against the real root UUID; GRUB Btrfs roots require `rootflags=subvol=@` |
+| 11. Services/boot | Gentoo chroot | Enable selected system services; switch installed resolver to systemd-resolved; **recheck ESP mounts, root/ESP/swap UUIDs and written fstab/cmdline**; install EFI bootloader and verify BLS default, kernel/initramfs/root parameters, architecture-correct EFI files, or GRUB's default kernel entry against the real root UUID; GRUB Btrfs roots require `rootflags=subvol=@` |
 | 12. Finish | Live ISO | Sync, recursively unmount chroot and installed filesystems; worker records final state |
 
 ## Why these boundaries matter
@@ -101,6 +101,23 @@ Before emerging the selected Gentoo kernel it runs `/usr/bin/btrfs --version`
 Btrfs tool stops the install without creating a questionable initramfs.
 For ext4 roots these steps are skipped. The package plan and check plan are
 unit-tested for both GRUB and systemd-boot.
+
+### Unique filesystem UUIDs after formatting (v0.5.6)
+
+Stagehand probes root, EFI and optional swap UUIDs immediately after their
+filesystem creation with `blkid --probe --no-part-details -s UUID -o value`.
+It separately checks each filesystem `TYPE`. The probe bypasses stale caches
+and never confuses the GPT partition UUID with the filesystem UUID.
+
+The captured UUIDs become the single source of truth for `fstab` and
+`/etc/kernel/cmdline`. Btrfs `@` and `@home` use the same filesystem UUID
+but different subvolume options. GRUB and systemd-boot are both validated
+against the exact root UUID. The tool re-probes all identifiers and compares
+them to their stored values before installing the bootloader. It refuses
+mismatched, malformed and missing identifiers.
+
+Unit tests cover Btrfs, ext4, FAT32 EFI and optional swap, as well as
+duplicate and malformed IDs. A real boot test still remains outstanding.
 
 ## Validation
 

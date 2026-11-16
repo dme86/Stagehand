@@ -97,7 +97,7 @@ pub fn verify_efi_binary(root: &Path, arch: &str, systemd: bool) -> Result<()> {
     Ok(())
 }
 
-fn kernel_options(options: &str, filesystem: Filesystem, actual_uuid: Option<&str>) -> Result<()> {
+fn kernel_options(options: &str, filesystem: Filesystem, actual_uuid: &str) -> Result<()> {
     let root_params: Vec<_> = options
         .split_whitespace()
         .filter_map(|v| v.strip_prefix("root="))
@@ -106,14 +106,11 @@ fn kernel_options(options: &str, filesystem: Filesystem, actual_uuid: Option<&st
         bail!("Boot entry requires exactly one root= argument");
     }
     let target = root_params[0];
-    let is_label = target == "LABEL=ROOT";
-    let is_uuid = actual_uuid.is_some_and(|uuid| {
-        target
-            .strip_prefix("UUID=")
-            .is_some_and(|value| value.eq_ignore_ascii_case(uuid))
-    });
-    if !is_label && !is_uuid {
-        bail!("Boot root {target} does not identify the installed ROOT filesystem");
+    let is_uuid = target
+        .strip_prefix("UUID=")
+        .is_some_and(|uuid| uuid.eq_ignore_ascii_case(actual_uuid));
+    if !is_uuid {
+        bail!("Boot root {target} does not match the installed root filesystem UUID={actual_uuid}");
     }
     let flags: Vec<_> = options
         .split_whitespace()
@@ -129,7 +126,7 @@ fn kernel_options(options: &str, filesystem: Filesystem, actual_uuid: Option<&st
     Ok(())
 }
 
-pub fn verify_systemd_entries(root: &Path, filesystem: Filesystem) -> Result<()> {
+pub fn verify_systemd_entries(root: &Path, filesystem: Filesystem, installed_root_uuid: &str) -> Result<()> {
     // A persistent private machine-id and a unique public entry token must
     // coexist without exposing machine-id on the ESP.
     let token = boot_identity::entry_token(root)?;
@@ -147,7 +144,7 @@ pub fn verify_systemd_entries(root: &Path, filesystem: Filesystem) -> Result<()>
         bail!("systemd-boot default does not match the installation's entry token");
     }
     let expected_cmdline = fs::read_to_string(root.join("etc/kernel/cmdline"))?;
-    kernel_options(&expected_cmdline, filesystem, None)?;
+    kernel_options(&expected_cmdline, filesystem, installed_root_uuid)?;
     let entries = root.join("boot/loader/entries");
     let mut found = 0usize;
     for entry in fs::read_dir(&entries)
@@ -193,7 +190,7 @@ pub fn verify_systemd_entries(root: &Path, filesystem: Filesystem) -> Result<()>
         {
             bail!("Boot entry {name} kernel parameters differ from /etc/kernel/cmdline");
         }
-        kernel_options(&options[0], filesystem, None)?;
+        kernel_options(&options[0], filesystem, installed_root_uuid)?;
     }
     if found == 0 {
         bail!("No BLS entries match systemd-boot's default {default}");
@@ -269,7 +266,7 @@ pub fn verify_grub_entries(
     if !matching_initramfs {
         bail!("GRUB default kernel {kernel_name} has no matching initramfs version");
     }
-    kernel_options(&opts, filesystem, Some(installed_root_uuid))?;
+    kernel_options(&opts, filesystem, installed_root_uuid)?;
     Ok(())
 }
 
@@ -330,7 +327,7 @@ mod tests {
         write_file(
             &root,
             "etc/kernel/cmdline",
-            b"console=tty0 root=LABEL=ROOT rootfstype=btrfs rootflags=subvol=@ rw\n",
+            b"console=tty0 root=UUID=01234567-89ab-cdef-0123-456789abcdef rootfstype=btrfs rootflags=subvol=@ rw\n",
         );
         write_file(
             &root,
@@ -338,14 +335,14 @@ mod tests {
             b"default gentoo-0123456789abcdef01234567-*\ntimeout 3\n",
         );
         write_file(&root, "boot/loader/entries/gentoo-0123456789abcdef01234567-6.12.conf",
-            b"title Gentoo\nlinux /gentoo/6.12/linux\ninitrd /gentoo/6.12/initrd\noptions console=tty0 root=LABEL=ROOT rootfstype=btrfs rootflags=subvol=@ rw\n");
+            b"title Gentoo\nlinux /gentoo/6.12/linux\ninitrd /gentoo/6.12/initrd\noptions console=tty0 root=UUID=01234567-89ab-cdef-0123-456789abcdef rootfstype=btrfs rootflags=subvol=@ rw\n");
         write_file(&root, "boot/gentoo/6.12/linux", &vec![1; 8192]);
         write_file(&root, "boot/gentoo/6.12/initrd", &vec![1; 8192]);
-        assert!(verify_systemd_entries(&root, Filesystem::Btrfs).is_ok());
+        assert!(verify_systemd_entries(&root, Filesystem::Btrfs, "01234567-89ab-cdef-0123-456789abcdef").is_ok());
         // A future kernel-install invocation must not silently fall back
         // to a different token or to an empty machine-id.
         write_file(&root, "etc/machine-id", b"");
-        assert!(verify_systemd_entries(&root, Filesystem::Btrfs).is_err());
+        assert!(verify_systemd_entries(&root, Filesystem::Btrfs, "01234567-89ab-cdef-0123-456789abcdef").is_err());
         write_file(
             &root,
             "etc/machine-id",
@@ -356,7 +353,7 @@ mod tests {
             "boot/loader/loader.conf",
             b"default gentoo-*\ntimeout 3\n",
         );
-        assert!(verify_systemd_entries(&root, Filesystem::Btrfs).is_err());
+        assert!(verify_systemd_entries(&root, Filesystem::Btrfs, "01234567-89ab-cdef-0123-456789abcdef").is_err());
         write_file(
             &root,
             "boot/loader/loader.conf",
@@ -367,43 +364,45 @@ mod tests {
             "boot/loader/entries/gentoo-0123456789abcdef01234567-6.12.conf",
             b"linux /gentoo/6.12/linux\ninitrd /gentoo/6.12/initrd\noptions root=LABEL=LIVE rw\n",
         );
-        assert!(verify_systemd_entries(&root, Filesystem::Btrfs).is_err());
+        assert!(verify_systemd_entries(&root, Filesystem::Btrfs, "01234567-89ab-cdef-0123-456789abcdef").is_err());
         write_file(&root, "boot/loader/entries/gentoo-0123456789abcdef01234567-6.12.conf",
-            b"linux /gentoo/6.12/linux\ninitrd /../etc/shadow\noptions console=tty0 root=LABEL=ROOT rootfstype=btrfs rootflags=subvol=@ rw\n");
-        assert!(verify_systemd_entries(&root, Filesystem::Btrfs).is_err());
+            b"linux /gentoo/6.12/linux\ninitrd /../etc/shadow\noptions console=tty0 root=UUID=01234567-89ab-cdef-0123-456789abcdef rootfstype=btrfs rootflags=subvol=@ rw\n");
+        assert!(verify_systemd_entries(&root, Filesystem::Btrfs, "01234567-89ab-cdef-0123-456789abcdef").is_err());
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn grub_checks_default_entry_kernel_initrd_and_real_uuid() {
         let root = root();
-        let config = "menuentry 'Gentoo' {\n linux /vmlinuz-6 root=UUID=abc-123 rootflags=subvol=@ rw\n initrd /initramfs-6.img\n}\n";
+        let config = "menuentry 'Gentoo' {\n linux /vmlinuz-6 root=UUID=01234567-89ab-cdef-0123-456789abcdef rootflags=subvol=@ rw\n initrd /initramfs-6.img\n}\n";
         write_file(&root, "boot/grub/grub.cfg", config.as_bytes());
         write_file(&root, "boot/vmlinuz-6", &vec![1; 8192]);
         write_file(&root, "boot/initramfs-6.img", &vec![1; 8192]);
-        assert!(verify_grub_entries(&root, Filesystem::Btrfs, "abc-123").is_ok());
+        assert!(verify_grub_entries(&root, Filesystem::Btrfs, "01234567-89ab-cdef-0123-456789abcdef").is_ok());
         assert!(verify_grub_entries(&root, Filesystem::Btrfs, "other").is_err());
         write_file(&root, "boot/grub/grub.cfg",
-            b"menuentry 'Gentoo' {\n linux /vmlinuz-6 root=UUID=abc-123 rootflags=subvol=@ rw\n initrd /initramfs-7.img\n}\n");
+            b"menuentry 'Gentoo' {\n linux /vmlinuz-6 root=UUID=01234567-89ab-cdef-0123-456789abcdef rootflags=subvol=@ rw\n initrd /initramfs-7.img\n}\n");
         write_file(&root, "boot/initramfs-7.img", &vec![1; 8192]);
-        assert!(verify_grub_entries(&root, Filesystem::Btrfs, "abc-123").is_err());
+        assert!(verify_grub_entries(&root, Filesystem::Btrfs, "01234567-89ab-cdef-0123-456789abcdef").is_err());
         write_file(&root, "boot/grub/grub.cfg",
-            b"menuentry 'Gentoo' {\n linux /vmlinuz-6 root=UUID=abc-123 rw\n initrd /initramfs-6.img\n}\n");
-        assert!(verify_grub_entries(&root, Filesystem::Btrfs, "abc-123").is_err());
+            b"menuentry 'Gentoo' {\n linux /vmlinuz-6 root=UUID=01234567-89ab-cdef-0123-456789abcdef rw\n initrd /initramfs-6.img\n}\n");
+        assert!(verify_grub_entries(&root, Filesystem::Btrfs, "01234567-89ab-cdef-0123-456789abcdef").is_err());
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
-    fn rejects_ambiguous_roots_and_wrong_filesystem_flags() {
-        assert!(
-            kernel_options("root=LABEL=ROOT root=LABEL=LIVE rw", Filesystem::Ext4, None).is_err()
-        );
-        assert!(
-            kernel_options("root=LABEL=ROOT rootflags=subvol=@", Filesystem::Ext4, None).is_err()
-        );
-        assert!(kernel_options(
-            "root=LABEL=ROOT rootflags=subvol=@",
-            Filesystem::Btrfs,
-            None
-        )
-        .is_ok());
+    fn root_must_be_the_exact_installed_uuid_not_a_label_or_another_disk() {
+        let uuid = "01234567-89ab-cdef-0123-456789abcdef";
+        assert!(kernel_options("root=LABEL=ROOT rw", Filesystem::Ext4, uuid).is_err());
+        assert!(kernel_options("root=UUID=wrong rw", Filesystem::Ext4, uuid).is_err());
+        assert!(kernel_options(&format!("root=UUID={uuid} root=UUID={uuid} rw"),
+            Filesystem::Ext4, uuid).is_err());
+        assert!(kernel_options(&format!("root=UUID={uuid} rootflags=subvol=@ rw"),
+            Filesystem::Ext4, uuid).is_err());
+        assert!(kernel_options(&format!("root=UUID={uuid} rootflags=subvol=@ rw"),
+            Filesystem::Btrfs, uuid).is_ok());
+        assert!(kernel_options(&format!("root=UUID={} rootflags=subvol=@ rw", uuid.to_uppercase()),
+            Filesystem::Btrfs, uuid).is_ok());
+        assert!(kernel_options(&format!("root=UUID={uuid} rw"),
+            Filesystem::Btrfs, uuid).is_err());
     }
+
 }

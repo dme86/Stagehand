@@ -10,7 +10,7 @@ A keyboard-first, guided **Gentoo Linux installer written in Rust**. Inspired by
 Stagehand lets you configure an installation in a clean terminal interface,
 review every decision, and install only after explicit confirmation.
 
-> **Early development (v0.5.5).** The installer has not yet passed an end-to-end
+> **Early development (v0.5.6).** The installer has not yet passed an end-to-end
 > UEFI VM boot test. **Do not run it against a disk containing valuable data.**
 > Use a disposable virtual machine until the installation and boot path are validated.
 
@@ -18,7 +18,7 @@ review every decision, and install only after explicit confirmation.
 
 ```text
 ┌ Welcome ────────────────────────────────────────────────────────────────┐
-│ STAGEHAND              Gentoo installer · v0.5.5 · AMD64 / x86_64       │
+│ STAGEHAND              Gentoo installer · v0.5.6 · AMD64 / x86_64       │
 ├ Installation settings ───┬ Details ─────────────────────────────────────┤
 │ › Storage                │ Welcome to Stagehand.                       │
 │     /dev/vda · Btrfs     │                                            │
@@ -199,7 +199,7 @@ See the systemd
 and [bootctl](https://www.freedesktop.org/software/systemd/man/latest/bootctl.html)
 documentation.
 
-## Bootloader verification (v0.5.5)
+## Bootloader verification (v0.5.6)
 
 Stagehand now verifies the **installed EFI boot chain** after setting up
 the bootloader, rather than treating the existence of an entry file as proof.
@@ -236,6 +236,40 @@ boot entries and UUIDs without touching real disks.
 full firmware simulation, Secure Boot signature verification, or
 proof that a hardware-specific initramfs successfully boots. A
 complete QEMU/OVMF install-and-reboot test is still required.
+
+## Stable filesystem UUIDs for root, EFI and swap (v0.5.6)
+
+Stagehand no longer uses `LABEL=ROOT`, `LABEL=EFI`, or `LABEL=SWAP`
+as installed filesystem identifiers. After formatting the target disk,
+it uses `blkid --probe --no-part-details` **on each concrete partition
+device** to read the newly created filesystem UUID and type, bypassing
+libblkid's device-cache. It rejects an unrecognized filesystem type,
+missing/malformed UUID and any duplicate identifier before extracting
+Stage3 or writing the installed configuration.
+
+- **Btrfs:** `fstab` mounts `/` and `/home` using the **same root UUID**
+  with their respective `subvol=@` and `subvol=@home` mount options.
+  The kernel command line uses `root=UUID=<root-uuid>` and
+  `rootflags=subvol=@`.
+- **ext4:** `fstab` uses the ext4 root UUID and kernel arguments include
+  `root=UUID=<root-uuid> rootfstype=ext4` without Btrfs flags.
+- **EFI:** `/boot` mounts by its FAT32 UUID rather than a generic label.
+- **Swap:** when enabled, `fstab` uses the specific swap UUID created by
+  `mkswap`. No swap entry is generated otherwise.
+
+UUIDs are checked for consistency after configuration and freshly
+re-probed before bootloader installation. For systemd-boot, Stagehand's
+BLS entry validator must find the exact installed root UUID in
+`/etc/kernel/cmdline` and the installed entry. For GRUB, the validator
+must match the kernel's `root=UUID=` against the same value. Using
+`LABEL=ROOT` or any other UUID causes installation validation to fail.
+
+This avoids accidental booting or mounting a different drive that
+happens to be labelled `ROOT`, including attached disks. It does not
+replace the pending end-to-end UEFI/QEMU first-boot test.
+
+References: [Gentoo AMD64 Handbook – filesystem and partition UUIDs](https://wiki.gentoo.org/wiki/Handbook:AMD64)
+and [util-linux blkid](https://man7.org/linux/man-pages/man8/blkid.8.html).
 
 ## Btrfs filesystem tools before kernel installation
 
@@ -379,7 +413,7 @@ test: use a disposable UEFI QEMU disk before trusting a new configuration.
 
 ## Gentoo Handbook coverage
 
-Stagehand v0.5.5 incorporates additional choices from the official
+Stagehand v0.5.6 incorporates additional choices from the official
 [Gentoo AMD64 Handbook](https://wiki.gentoo.org/wiki/Handbook:AMD64).
 Both AMD64 and ARM64 offer standard and desktop systemd Stage3 archives; desktop
 Stage3 includes extra development tools, **not a preinstalled graphical environment**.
