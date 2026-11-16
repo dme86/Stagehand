@@ -1,4 +1,4 @@
-use crate::{config::Config, disks};
+use crate::{config::{Config, Bootloader}, disks};
 use anyhow::{anyhow, bail, Context, Result};
 use sha2::{Digest, Sha256};
 use std::{
@@ -124,11 +124,14 @@ fn install(c: &Config, tx: &Sender<Event>) -> Result<()> {
         "/usr/bin/emerge",
         "--noreplace",
         "sys-kernel/installkernel",
-        "sys-kernel/gentoo-kernel-bin",
+        c.kernel.package(),
         "sys-kernel/linux-firmware",
         "sys-fs/btrfs-progs",
         "app-admin/sudo",
     ];
+    if c.bootloader == Bootloader::Grub {
+        packages.push("sys-boot/grub");
+    }
     if c.ssh_enabled {
         packages.push("net-misc/openssh");
     }
@@ -185,7 +188,7 @@ fn install(c: &Config, tx: &Sender<Event>) -> Result<()> {
         )?;
     }
 
-    progress(tx, 11, "Enable services and configure systemd-boot");
+    progress(tx, 11, "Enable services and configure bootloader");
     let mut services = vec![
         "/usr/bin/systemctl",
         "enable",
@@ -200,31 +203,7 @@ fn install(c: &Config, tx: &Sender<Event>) -> Result<()> {
     let resolver = Path::new(ROOT).join("etc/resolv.conf");
     fs::remove_file(&resolver)?;
     symlink("../run/systemd/resolve/stub-resolv.conf", &resolver)?;
-    inside(&[
-        "/usr/bin/bootctl",
-        "--esp-path=/boot",
-        "install",
-        "--no-variables",
-    ])?;
-    write(
-        "boot/loader/loader.conf",
-        "default gentoo-*\ntimeout 3\neditor no\n",
-    )?;
-    let entries = Path::new(ROOT).join("boot/loader/entries");
-    let ukis = Path::new(ROOT).join("boot/EFI/Linux");
-    let has_entries = entries.is_dir()
-        && fs::read_dir(entries)?.any(|e| {
-            e.ok()
-                .is_some_and(|f| f.path().extension().is_some_and(|s| s == "conf"))
-        });
-    let has_ukis = ukis.is_dir()
-        && fs::read_dir(ukis)?.any(|e| {
-            e.ok()
-                .is_some_and(|f| f.path().extension().is_some_and(|s| s == "efi"))
-        });
-    if !has_entries && !has_ukis {
-        bail!("No systemd-boot entry or UKI found. Inspect the log before rebooting.");
-    }
+    install_bootloader(c)?;
 
     progress(tx, 12, "Sync disks and safely unmount");
     exec("sync", &[])?;
@@ -356,6 +335,42 @@ fn sha256(path: &Path) -> Result<String> {
     }
     Ok(format!("{:x}", sha.finalize()))
 }
+fn install_bootloader(config: &Config) -> Result<()> {
+    match config.bootloader {
+        Bootloader::SystemdBoot => {
+            inside(&["/usr/bin/bootctl", "--esp-path=/boot", "install", "--no-variables"])?;
+            write("boot/loader/loader.conf", "default gentoo-*\ntimeout 3\neditor no\n")?;
+            let entries = Path::new(ROOT).join("boot/loader/entries");
+            let ukis = Path::new(ROOT).join("boot/EFI/Linux");
+            let has_entries = entries.is_dir()
+                && fs::read_dir(entries)?.any(|e| e.ok()
+                    .is_some_and(|f| f.path().extension().is_some_and(|x| x == "conf")));
+            let has_ukis = ukis.is_dir()
+                && fs::read_dir(ukis)?.any(|e| e.ok()
+                    .is_some_and(|f| f.path().extension().is_some_and(|x| x == "efi")));
+            if !has_entries && !has_ukis {
+                bail!("No systemd-boot entry or UKI found. Inspect the kernel install logs before rebooting.");
+            }
+        }
+        Bootloader::Grub => {
+            let target = match std::env::consts::ARCH {
+                "x86_64" => "x86_64-efi",
+                "aarch64" => "arm64-efi",
+                _ => bail!("Unsupported GRUB target architecture"),
+            };
+            inside(&["/usr/sbin/grub-install", &format!("--target={target}"),
+                "--efi-directory=/boot", "--bootloader-id=Gentoo",
+                "--removable", "--no-nvram"])?;
+            inside(&["/usr/sbin/grub-mkconfig", "-o", "/boot/grub/grub.cfg"])?;
+            let grub = Path::new(ROOT).join("boot/grub/grub.cfg");
+            if !grub.is_file() || fs::metadata(&grub)?.len() == 0 {
+                bail!("GRUB failed to produce a usable configuration.");
+            }
+        }
+    }
+    Ok(())
+}
+
 fn configure(c: &Config) -> Result<()> {
     write("etc/fstab", "# Stagehand\nLABEL=ROOT / btrfs noatime,compress=zstd,space_cache=v2,subvol=@ 0 0\nLABEL=ROOT /home btrfs noatime,compress=zstd,space_cache=v2,subvol=@home 0 0\nLABEL=EFI /boot vfat defaults,noatime 0 2\n")?;
     write("etc/hostname", &format!("{}\n", c.hostname))?;
@@ -373,8 +388,13 @@ fn configure(c: &Config) -> Result<()> {
         "etc/systemd/network/20-wired.network",
         "[Match]\nName=en* eth*\n\n[Network]\nDHCP=yes\n",
     )?;
-    write("etc/portage/package.use/stagehand",
-        "sys-apps/systemd boot\nsys-apps/systemd-utils boot kernel-install\nsys-kernel/installkernel systemd systemd-boot dracut\n")?;
+    let boot_use = match c.bootloader {
+        Bootloader::SystemdBoot =>
+            "sys-apps/systemd boot\nsys-apps/systemd-utils boot kernel-install\nsys-kernel/installkernel systemd systemd-boot dracut -grub\n",
+        Bootloader::Grub =>
+            "sys-kernel/installkernel dracut grub -systemd-boot\n",
+    };
+    write("etc/portage/package.use/stagehand", boot_use)?;
     write(
         "etc/portage/package.license/stagehand",
         "sys-kernel/linux-firmware linux-fw-redistributable\n",

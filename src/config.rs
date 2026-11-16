@@ -1,8 +1,35 @@
 use crate::disks::Disk;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kernel {
+    Binary,
+    Source,
+}
+impl Kernel {
+    pub fn label(self) -> &'static str {
+        match self { Self::Binary => "gentoo-kernel-bin", Self::Source => "gentoo-kernel" }
+    }
+    pub fn package(self) -> &'static str {
+        match self { Self::Binary => "sys-kernel/gentoo-kernel-bin", Self::Source => "sys-kernel/gentoo-kernel" }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Bootloader {
+    SystemdBoot,
+    Grub,
+}
+impl Bootloader {
+    pub fn label(self) -> &'static str {
+        match self { Self::SystemdBoot => "systemd-boot", Self::Grub => "GRUB (UEFI)" }
+    }
+}
+
 #[derive(Clone)]
 pub struct Config {
     pub disk: Option<Disk>,
+    pub kernel: Kernel,
+    pub bootloader: Bootloader,
     pub hostname: String,
     pub timezone: String,
     pub keymap: String,
@@ -17,6 +44,8 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             disk: None,
+            kernel: Kernel::Binary,
+            bootloader: Bootloader::SystemdBoot,
             hostname: "gentoo".into(),
             timezone: "Europe/Berlin".into(),
             keymap: "de".into(),
@@ -31,8 +60,9 @@ impl Default for Config {
 
 impl Config {
     pub fn validate(&self) -> Result<(), String> {
-        if self.disk.is_none() {
-            return Err("Select an installation disk.".into());
+        let disk = self.disk.as_ref().ok_or("Select an installation disk.")?;
+        if disk.block_reason.is_some() {
+            return Err("The selected disk is mounted, removable, read-only, or too small.".into());
         }
         if !valid_hostname(&self.hostname) {
             return Err("Hostname must be 1-63 ASCII letters, digits or hyphens, and cannot start/end with '-'.".into());
@@ -119,6 +149,8 @@ mod tests {
     #[test]
     fn default_requires_disk_and_credentials() {
         assert!(Config::default().validate().is_err());
+        assert_eq!(Config::default().kernel, Kernel::Binary);
+        assert_eq!(Config::default().bootloader, Bootloader::SystemdBoot);
     }
 
     #[test]
