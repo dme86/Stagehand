@@ -555,10 +555,13 @@ fn verify_generated_initramfs(loader: Bootloader) -> Result<()> {
 /// entries; produce a chroot-visible path to the actual filesystem object.
 fn boot_entry_file(root: &Path, spec: &str) -> Result<String> {
     use std::path::Component;
-    let relative = spec.strip_prefix('/')
+    let relative = spec
+        .strip_prefix('/')
         .context("Boot entry reference must be an absolute path within the EFI system partition")?;
     if relative.is_empty()
-        || !Path::new(relative).components().all(|part| matches!(part, Component::Normal(_)))
+        || !Path::new(relative)
+            .components()
+            .all(|part| matches!(part, Component::Normal(_)))
     {
         bail!("Unsafe boot entry path {spec}");
     }
@@ -571,7 +574,10 @@ fn require_boot_file(path: &Path) -> Result<()> {
     let meta = fs::metadata(path)
         .with_context(|| format!("Missing installed boot artifact {}", path.display()))?;
     if !meta.is_file() || meta.len() < 4096 {
-        bail!("Boot artifact {} is missing, not a file, or implausibly small", path.display());
+        bail!(
+            "Boot artifact {} is missing, not a file, or implausibly small",
+            path.display()
+        );
     }
     Ok(())
 }
@@ -588,7 +594,11 @@ fn initramfs_candidates(root: &Path, loader: Bootloader) -> Result<Vec<String>> 
                 .with_context(|| format!("No systemd-boot entries under {}", entries.display()))?
             {
                 let file = file?;
-                if file.path().extension().is_none_or(|extension| extension != "conf") {
+                if file
+                    .path()
+                    .extension()
+                    .is_none_or(|extension| extension != "conf")
+                {
                     continue;
                 }
                 let content = fs::read_to_string(file.path())?;
@@ -613,8 +623,12 @@ fn initramfs_candidates(root: &Path, loader: Bootloader) -> Result<Vec<String>> 
                 let entry = entry?;
                 let name = entry.file_name();
                 let name = name.to_string_lossy();
-                let Some(version) = name.strip_prefix("initramfs-")
-                    .and_then(|v| v.strip_suffix(".img")) else { continue };
+                let Some(version) = name
+                    .strip_prefix("initramfs-")
+                    .and_then(|v| v.strip_suffix(".img"))
+                else {
+                    continue;
+                };
                 if version.is_empty() {
                     continue;
                 }
@@ -1043,8 +1057,11 @@ mod tests {
     }
     fn fake_boot_root() -> PathBuf {
         let id = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let root = std::env::temp_dir().join(format!("stagehand-boot-test-{}-{id}", std::process::id()));
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("stagehand-boot-test-{}-{id}", std::process::id()));
         fs::create_dir_all(&root).unwrap();
         root
     }
@@ -1059,12 +1076,16 @@ mod tests {
             fs::write(boot.join("gentoo/6.12/initrd"), vec![1; 8192])?;
             fs::write(boot.join("loader/entries/gentoo.conf"),
                 "title Gentoo\nlinux /gentoo/6.12/linux\ninitrd /gentoo/6.12/initrd\noptions root=LABEL=ROOT rw\n")?;
-            assert_eq!(initramfs_candidates(&root, Bootloader::SystemdBoot)?,
-                vec!["/boot/gentoo/6.12/initrd"]);
+            assert_eq!(
+                initramfs_candidates(&root, Bootloader::SystemdBoot)?,
+                vec!["/boot/gentoo/6.12/initrd"]
+            );
             fs::remove_file(boot.join("gentoo/6.12/initrd"))?;
             assert!(initramfs_candidates(&root, Bootloader::SystemdBoot).is_err());
-            fs::write(boot.join("loader/entries/gentoo.conf"),
-                "linux /gentoo/6.12/linux\ninitrd /../../etc/shadow\n")?;
+            fs::write(
+                boot.join("loader/entries/gentoo.conf"),
+                "linux /gentoo/6.12/linux\ninitrd /../../etc/shadow\n",
+            )?;
             assert!(initramfs_candidates(&root, Bootloader::SystemdBoot).is_err());
             Ok(())
         })();
@@ -1080,8 +1101,10 @@ mod tests {
             fs::write(boot.join("initramfs-6.12-gentoo.img"), vec![1; 8192])?;
             assert!(initramfs_candidates(&root, Bootloader::Grub).is_err());
             fs::write(boot.join("vmlinuz-6.12-gentoo"), vec![1; 8192])?;
-            assert_eq!(initramfs_candidates(&root, Bootloader::Grub)?,
-                vec!["/boot/initramfs-6.12-gentoo.img"]);
+            assert_eq!(
+                initramfs_candidates(&root, Bootloader::Grub)?,
+                vec!["/boot/initramfs-6.12-gentoo.img"]
+            );
             fs::write(boot.join("initramfs-6.12-gentoo.img"), vec![1; 128])?;
             assert!(initramfs_candidates(&root, Bootloader::Grub).is_err());
             Ok(())
