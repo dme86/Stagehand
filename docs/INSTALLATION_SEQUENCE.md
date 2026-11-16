@@ -61,8 +61,9 @@ Gentoo chroot. Any missing or unreadable initramfs stops installation.
 
 ### Bootloader chain validation (0.5.3)
 
-Before emerging the kernel, systemd-boot installations pin the BLS entry
-name to `gentoo` and explicitly configure `layout=bls`. After installing
+Before emerging the kernel, Stagehand generates an independent random
+machine ID and a public `gentoo-<random>` entry token for systemd-boot.
+It explicitly configures `layout=bls`. After installing
 the bootloader, the validator checks the configured default BLS entry,
 its kernel/initrd resources, exact kernel command line, the fallback EFI
 binary, and the systemd EFI loader. `bootctl list` runs inside the chroot.
@@ -71,6 +72,25 @@ GRUB validates `grub.cfg` syntax and its **default** Linux entry, including
 real kernel and matching-version initramfs files plus root= UUID identity
 from the installed root partition. Both paths check EFI PE machine type
 (AMD64 vs ARM64) and reject missing or suspicious boot resources.
+
+
+### Unique machine identity and stable boot entry names (0.5.4)
+
+Stagehand writes an independent 128-bit systemd machine ID to the new
+Gentoo installation **before** Portage runs. This ID is never copied from
+the live ISO and remains stable across the first boot and subsequent boots.
+
+For systemd-boot, a separate random 96-bit token prefixed with `gentoo-`
+is written to `/etc/kernel/entry-token`, preventing installation name
+collisions and avoiding machine ID disclosure in FAT EFI filenames.
+`kernel-install`, `bootctl --entry-token=literal:<token>`, and the
+`default <token>-*` loader pattern all use the *same* token. The boot
+validator rejects inconsistent or missing values. Both values are created
+before the kernel triggers installkernel; they are not regenerated later.
+
+Preinitializing machine-id means `ConditionFirstBoot=yes` is not triggered.
+That is intentional for this interactive installer, which provisions users,
+locale, networking and services itself (not a reusable disk image).
 
 ## Validation
 

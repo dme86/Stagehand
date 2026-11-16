@@ -1,6 +1,6 @@
 //! Validate the installed UEFI boot chain, not just the presence of a .conf.
 //! Pure filesystem checks can be unit-tested without a firmware VM.
-use crate::config::Filesystem;
+use crate::{boot_identity, config::Filesystem};
 use anyhow::{bail, Context, Result};
 use std::{
     fs::{self, File},
@@ -8,7 +8,6 @@ use std::{
     path::{Component, Path},
 };
 
-const TOKEN: &str = "gentoo";
 const MIN_BOOT_FILE_SIZE: u64 = 4096;
 
 fn artifact(path: &Path) -> Result<()> {
@@ -131,16 +130,21 @@ fn kernel_options(options: &str, filesystem: Filesystem, actual_uuid: Option<&st
 }
 
 pub fn verify_systemd_entries(root: &Path, filesystem: Filesystem) -> Result<()> {
-    if fs::read_to_string(root.join("etc/kernel/entry-token"))?.trim() != TOKEN {
-        bail!("kernel-install entry-token does not match Stagehand loader default");
-    }
+    // A persistent private machine-id and a unique public entry token must
+    // coexist without exposing machine-id on the ESP.
+    let token = boot_identity::entry_token(root)?;
+    let default = boot_identity::loader_default(&token)?;
+    let prefix = format!("{token}-");
     let install_conf = fs::read_to_string(root.join("etc/kernel/install.conf"))?;
     if !install_conf.lines().any(|line| line.trim() == "layout=bls") {
         bail!("kernel-install layout is not bls");
     }
     let loader = fs::read_to_string(root.join("boot/loader/loader.conf"))?;
-    if !loader.lines().any(|line| line.trim() == "default gentoo-*") {
-        bail!("systemd-boot default does not select Stagehand's Gentoo entries");
+    if !loader
+        .lines()
+        .any(|line| line.trim() == format!("default {default}"))
+    {
+        bail!("systemd-boot default does not match the installation's entry token");
     }
     let expected_cmdline = fs::read_to_string(root.join("etc/kernel/cmdline"))?;
     kernel_options(&expected_cmdline, filesystem, None)?;
@@ -151,7 +155,7 @@ pub fn verify_systemd_entries(root: &Path, filesystem: Filesystem) -> Result<()>
     {
         let path = entry?.path();
         let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-        if !name.starts_with("gentoo-") || !name.ends_with(".conf") {
+        if !name.starts_with(&prefix) || !name.ends_with(".conf") {
             continue;
         }
         if !fs::symlink_metadata(&path)?.file_type().is_file() {
@@ -192,7 +196,7 @@ pub fn verify_systemd_entries(root: &Path, filesystem: Filesystem) -> Result<()>
         kernel_options(&options[0], filesystem, None)?;
     }
     if found == 0 {
-        bail!("No gentoo-* boot entries match systemd-boot's default setting");
+        bail!("No BLS entries match systemd-boot's default {default}");
     }
     Ok(())
 }
@@ -312,7 +316,16 @@ mod tests {
     #[test]
     fn systemd_entry_must_match_kernel_initrd_cmdline_and_default() {
         let root = root();
-        write_file(&root, "etc/kernel/entry-token", b"gentoo\n");
+        write_file(
+            &root,
+            "etc/machine-id",
+            b"0123456789abcdef0123456789abcdef\n",
+        );
+        write_file(
+            &root,
+            "etc/kernel/entry-token",
+            b"gentoo-0123456789abcdef01234567\n",
+        );
         write_file(&root, "etc/kernel/install.conf", b"layout=bls\n");
         write_file(
             &root,
@@ -322,20 +335,40 @@ mod tests {
         write_file(
             &root,
             "boot/loader/loader.conf",
-            b"default gentoo-*\ntimeout 3\n",
+            b"default gentoo-0123456789abcdef01234567-*\ntimeout 3\n",
         );
-        write_file(&root, "boot/loader/entries/gentoo-6.12.conf",
+        write_file(&root, "boot/loader/entries/gentoo-0123456789abcdef01234567-6.12.conf",
             b"title Gentoo\nlinux /gentoo/6.12/linux\ninitrd /gentoo/6.12/initrd\noptions console=tty0 root=LABEL=ROOT rootfstype=btrfs rootflags=subvol=@ rw\n");
         write_file(&root, "boot/gentoo/6.12/linux", &vec![1; 8192]);
         write_file(&root, "boot/gentoo/6.12/initrd", &vec![1; 8192]);
         assert!(verify_systemd_entries(&root, Filesystem::Btrfs).is_ok());
+        // A future kernel-install invocation must not silently fall back
+        // to a different token or to an empty machine-id.
+        write_file(&root, "etc/machine-id", b"");
+        assert!(verify_systemd_entries(&root, Filesystem::Btrfs).is_err());
         write_file(
             &root,
-            "boot/loader/entries/gentoo-6.12.conf",
+            "etc/machine-id",
+            b"0123456789abcdef0123456789abcdef\n",
+        );
+        write_file(
+            &root,
+            "boot/loader/loader.conf",
+            b"default gentoo-*\ntimeout 3\n",
+        );
+        assert!(verify_systemd_entries(&root, Filesystem::Btrfs).is_err());
+        write_file(
+            &root,
+            "boot/loader/loader.conf",
+            b"default gentoo-0123456789abcdef01234567-*\ntimeout 3\n",
+        );
+        write_file(
+            &root,
+            "boot/loader/entries/gentoo-0123456789abcdef01234567-6.12.conf",
             b"linux /gentoo/6.12/linux\ninitrd /gentoo/6.12/initrd\noptions root=LABEL=LIVE rw\n",
         );
         assert!(verify_systemd_entries(&root, Filesystem::Btrfs).is_err());
-        write_file(&root, "boot/loader/entries/gentoo-6.12.conf",
+        write_file(&root, "boot/loader/entries/gentoo-0123456789abcdef01234567-6.12.conf",
             b"linux /gentoo/6.12/linux\ninitrd /../etc/shadow\noptions console=tty0 root=LABEL=ROOT rootfstype=btrfs rootflags=subvol=@ rw\n");
         assert!(verify_systemd_entries(&root, Filesystem::Btrfs).is_err());
         fs::remove_dir_all(root).unwrap();

@@ -10,7 +10,7 @@ A keyboard-first, guided **Gentoo Linux installer written in Rust**. Inspired by
 Stagehand lets you configure an installation in a clean terminal interface,
 review every decision, and install only after explicit confirmation.
 
-> **Early development (v0.5.3).** The installer has not yet passed an end-to-end
+> **Early development (v0.5.4).** The installer has not yet passed an end-to-end
 > UEFI VM boot test. **Do not run it against a disk containing valuable data.**
 > Use a disposable virtual machine until the installation and boot path are validated.
 
@@ -18,7 +18,7 @@ review every decision, and install only after explicit confirmation.
 
 ```text
 ┌ Welcome ────────────────────────────────────────────────────────────────┐
-│ STAGEHAND              Gentoo installer · v0.5.3 · AMD64 / x86_64       │
+│ STAGEHAND              Gentoo installer · v0.5.4 · AMD64 / x86_64       │
 ├ Installation settings ───┬ Details ─────────────────────────────────────┤
 │ › Storage                │ Welcome to Stagehand.                       │
 │     /dev/vda · Btrfs     │                                            │
@@ -163,7 +163,43 @@ time-based percentage. Failed commands and cleanup errors remain available
 in the log even after the TUI exits. The worker exits after installation
 success or failure; it is not a permanent daemon.
 
-## Bootloader verification (v0.5.3)
+## Stable system identity and Boot Loader Specification names
+
+Stagehand prepares **two independent identities during installation**:
+
+- A cryptographically random 128-bit `/etc/machine-id` in lowercase
+  hexadecimal. It is generated once for the target system, **not copied
+  from the Gentoo live ISO**, and persists across reboots.
+- An independent random 96-bit public token, prefixed with `gentoo-`,
+  for systemd-boot. This avoids exposing the private machine ID through
+  filenames on the unencrypted EFI system partition.
+
+Before the kernel is emerged, Stagehand writes
+`/etc/kernel/entry-token` and `/etc/kernel/install.conf` with
+`layout=bls`. `kernel-install` then generates entries named
+`<token>-<kernel-version>.conf`. At bootloader setup,
+`bootctl install --entry-token=literal:<token>` uses the same value,
+and `loader.conf` selects `default <token>-*`.
+
+The validator rejects a missing/invalid machine ID, a changed entry token,
+an unmatched default, or missing BLS entries. Subsequent kernel upgrades
+read the unchanged `/etc/kernel/entry-token`, so entries keep their
+names even after a reboot. GRUB also receives an independent stable
+machine ID, but does not require a systemd-boot entry token.
+
+**First-boot behavior:** because the machine ID is initialized during
+installation, systemd does not treat the first boot as a
+`ConditionFirstBoot=yes` boot. This is intentional for an installer that
+already configures users and services. For a reusable generic image,
+a blank machine ID would instead be appropriate.
+
+See the systemd
+[machine-id](https://www.freedesktop.org/software/systemd/man/latest/machine-id.html),
+[kernel-install](https://www.freedesktop.org/software/systemd/man/latest/kernel-install.html)
+and [bootctl](https://www.freedesktop.org/software/systemd/man/latest/bootctl.html)
+documentation.
+
+## Bootloader verification (v0.5.4)
 
 Stagehand now verifies the **installed EFI boot chain** after setting up
 the bootloader, rather than treating the existence of an entry file as proof.
@@ -173,11 +209,13 @@ the bootloader, rather than treating the existence of an entry file as proof.
   Stagehand checks that it is a real PE/COFF binary for the native
   architecture. systemd-boot must also have its loader under
   `/boot/EFI/systemd/`.
-- **systemd-boot:** before emerging the kernel, the installer pins
-  `/etc/kernel/entry-token` to `gentoo` and enables
-  `layout=bls` in `/etc/kernel/install.conf`. This matches
-  `default gentoo-*` in `loader.conf`, even though the machine ID
-  is generated on first boot. After `bootctl install`, Stagehand
+- **systemd-boot:** before emerging the kernel, Stagehand creates a
+  **unique, stable** machine ID for the installed system and a separate
+  `gentoo-<random>` entry token in `/etc/kernel/entry-token`, with
+  `layout=bls` in `/etc/kernel/install.conf`. The loader default
+  is calculated from that exact token (`default <token>-*`) and used
+  again by `bootctl`. This avoids naming collisions while keeping
+  the private machine ID off the ESP. After `bootctl install`, Stagehand
   verifies every matching BLS entry's kernel, initrd(s) and kernel
   parameters against `/etc/kernel/cmdline`, and calls `bootctl list`
   inside the target chroot.
@@ -305,7 +343,7 @@ selection, disk encryption and optional Anvil + rst desktop integration.
 
 The base installer follows the systemd/UEFI profile in
 [gentoo-ansible/install.yml](https://github.com/dme86/gentoo-ansible/blob/main/install.yml).
-Stagehand additionally configures `/etc/hosts`, a fresh first-boot `/etc/machine-id`,
+Stagehand additionally configures `/etc/hosts`, a fresh, preinitialized `/etc/machine-id`,
 `locale.gen`, `locale.conf` and the selected UTF-8 locale using `locale-gen`.
 The Gentoo Stage3's existing Portage profile and binhost settings are retained.
 
@@ -324,7 +362,7 @@ test: use a disposable UEFI QEMU disk before trusting a new configuration.
 
 ## Gentoo Handbook coverage
 
-Stagehand v0.5.3 incorporates additional choices from the official
+Stagehand v0.5.4 incorporates additional choices from the official
 [Gentoo AMD64 Handbook](https://wiki.gentoo.org/wiki/Handbook:AMD64).
 Both AMD64 and ARM64 offer standard and desktop systemd Stage3 archives; desktop
 Stage3 includes extra development tools, **not a preinstalled graphical environment**.

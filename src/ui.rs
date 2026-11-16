@@ -625,7 +625,7 @@ fn render(frame: &mut Frame, app: &App) {
             Style::default().fg(AMBER).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            "Gentoo installer  ·  v0.5.3  ·  ",
+            "Gentoo installer  ·  v0.5.4  ·  ",
             Style::default().fg(MUTED),
         ),
         Span::styled(arch_label(), Style::default().fg(AQUA)),
