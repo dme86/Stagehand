@@ -17,22 +17,23 @@ review every decision, and install only after explicit confirmation.
 ## One screen, all the important choices
 
 ```text
-┌ Welcome ───────────────────────────────────────────────────────────────────┐
-│ STAGEHAND                  Gentoo installer · v0.2.0                       │
-├ Installation settings ───────┬ Details ────────────────────────────────────┤
-│  Storage          /dev/vda    │ Welcome to Stagehand.                      │
-│  Hostname         gentoo      │                                             │
-│  Timezone         Europe/...  │ • Gentoo Linux with systemd                │
-│  Keymap           de          │ • GPT / UEFI / systemd-boot                 │
-│  User             dan         │ • Btrfs @ and @home (zstd)                  │
-│  User password    Configured  │ • Gentoo binary kernel                     │
-│  Root password    Configured  │ • systemd-networkd / DHCP                  │
-│  SSH service      Disabled    │ • Native amd64 and arm64                   │
-│  SSH public key   Not set     │                                             │
-│ ▶ Install Gentoo  Review     │ No disk changes until final confirmation.  │
-├ Keys ────────────────────────┴─────────────────────────────────────────────┤
-│ ↑↓/j/k Navigate   Enter Edit   q Quit                                      │
-└────────────────────────────────────────────────────────────────────────────┘
+┌ Welcome ───────────────────────────────────────────────────────────────┐
+│ STAGEHAND              Gentoo installer · v0.2.0 · AMD64 / x86_64      │
+├ Installation settings ───┬ Details ────────────────────────────────────┤
+│ › Storage                │ Welcome to Stagehand.                      │
+│     /dev/vda             │                                            │
+│ › System                 │ Installation profile:                      │
+│     gentoo, Europe/...   │ • Official Gentoo systemd Stage3           │
+│ › Kernel & boot          │ • gentoo-kernel-bin (default)               │
+│     bin · systemd-boot   │ • systemd-boot (default)                   │
+│ › Network                │ • GPT / UEFI / Btrfs                       │
+│     Wired DHCP          │ • AMD64 or ARM64 detected at runtime       │
+│ › Users                  │                                            │
+│     dan                 │ Enter a category to configure its options.│
+│ ▶ Install Gentoo         │ Nothing written before final confirmation.│
+├ Keys ────────────────────┴────────────────────────────────────────────┤
+│ ↑↓/j/k Navigate   Enter Open   q Quit                                 │
+└───────────────────────────────────────────────────────────────────────┘
 ```
 
 The main menu is organized into **Storage**, **System**, **Kernel & boot**, **Network** and **Users** submenus, plus a separate final installation action.

@@ -272,11 +272,7 @@ fn fetch_stage3(a: &str) -> Result<PathBuf> {
         "curl",
         &["-fsSL", "--retry", "3", &format!("{base}/{name}.sha256")],
     )?;
-    let expected = checksum
-        .split_whitespace()
-        .find(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
-        .ok_or_else(|| anyhow!("Malformed stage3 SHA-256 checksum"))?
-        .to_ascii_lowercase();
+    let expected = digest_for(&checksum, &name)?;
     let cache = Path::new("/tmp/stagehand-cache");
     fs::create_dir_all(cache)?;
     let file = cache.join(&name);
@@ -321,6 +317,18 @@ fn parse_name(index: &str, a: &str) -> Result<String> {
         })
         .next()
         .ok_or_else(|| anyhow!("Stage3 manifest contains no supported archive"))
+}
+fn digest_for(document: &str, filename: &str) -> Result<String> {
+    for line in document.lines() {
+        let parts: Vec<_> = line.split_whitespace().collect();
+        if parts.len() >= 2 && parts[0].len() == 64
+            && parts[0].bytes().all(|c| c.is_ascii_hexdigit())
+            && (parts[1] == filename || parts[1] == format!("*{filename}")
+                || parts[1] == format!("./{filename}")) {
+            return Ok(parts[0].to_ascii_lowercase());
+        }
+    }
+    bail!("Missing SHA-256 checksum for {filename}")
 }
 fn sha256(path: &Path) -> Result<String> {
     let mut f = File::open(path)?;
@@ -498,4 +506,12 @@ mod tests {
         );
         assert!(parse_name("../bad 42", "amd64").is_err());
     }
+    #[test]
+    fn checksum_is_bound_to_archive_name() {
+        let checksum = format!("{}  another.tar.xz", "a".repeat(64));
+        assert!(digest_for(&checksum, "stage3-amd64-systemd.tar.xz").is_err());
+        let correct = format!("{}  stage3-amd64-systemd.tar.xz", "a".repeat(64));
+        assert_eq!(digest_for(&correct, "stage3-amd64-systemd.tar.xz").unwrap(), "a".repeat(64));
+    }
+
 }
