@@ -10,8 +10,6 @@ use std::{
     os::unix::{fs::symlink, fs::PermissionsExt},
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::mpsc::Sender,
-    thread,
 };
 
 pub const LOG: &str = "/tmp/stagehand-install.log";
@@ -19,31 +17,44 @@ pub const STEP_COUNT: usize = 12;
 const ROOT: &str = "/mnt/stagehand";
 const MIRROR: &str = "https://distfiles.gentoo.org";
 
-pub enum Event {
-    Step(usize, String),
-    Complete(Result<(), String>),
-}
+/// Stable phase sequence for the TUI. The gauge measures completed phases,
+/// never elapsed time or estimated compilation/download progress.
+pub const PHASES: [&str; 12] = [
+    "Preflight checks",
+    "Fetch and verify Gentoo stage3",
+    "Partition selected disk",
+    "Format and mount selected filesystem",
+    "Extract systemd stage3",
+    "Configure filesystem, locale and network",
+    "Prepare Gentoo chroot",
+    "Initialize Portage tree",
+    "Install kernel, boot and essential packages",
+    "Create accounts and credentials",
+    "Enable services and configure bootloader",
+    "Sync disks and safely unmount",
+];
 
-pub fn start(config: Config, tx: Sender<Event>) {
-    thread::spawn(move || {
-        let result = install(&config, &tx).map_err(|e| format!("{e:#}"));
-        let _ = tx.send(Event::Complete(result));
-    });
+pub fn run(c: &Config, report: &mut impl FnMut(usize, &str) -> Result<()>) -> Result<()> {
+    install(c, report)
 }
-fn progress(tx: &Sender<Event>, n: usize, title: &str) {
-    let _ = tx.send(Event::Step(n, title.into()));
+fn progress(
+    report: &mut impl FnMut(usize, &str) -> Result<()>,
+    n: usize,
+    title: &str,
+) -> Result<()> {
+    report(n, title)
 }
-fn install(c: &Config, tx: &Sender<Event>) -> Result<()> {
-    progress(tx, 1, "Preflight checks");
+fn install(c: &Config, report: &mut impl FnMut(usize, &str) -> Result<()>) -> Result<()> {
+    File::create(LOG)?;
+    progress(report, 1, "Preflight checks")?;
     c.validate().map_err(anyhow::Error::msg)?;
     preflight(c)?;
-    File::create(LOG)?;
 
-    progress(tx, 2, "Fetch and verify Gentoo stage3");
+    progress(report, 2, "Fetch and verify Gentoo stage3")?;
     let stage3 = fetch_stage3(arch()?, c.stage3)?;
 
     // This is the destructive boundary: all earlier steps are read-only.
-    progress(tx, 3, "Partition selected disk");
+    progress(report, 3, "Partition selected disk")?;
     let selected = c.disk.as_ref().context("No disk selected")?;
     disks::verify_target(selected)?;
     let disk = selected.path.as_str();
@@ -71,7 +82,7 @@ fn install(c: &Config, tx: &Sender<Event>) -> Result<()> {
     let root = disks::partition_path(disk, root_number);
     let swap_device = (c.swap == Swap::FourGiB).then(|| disks::partition_path(disk, 2));
 
-    progress(tx, 4, "Format and mount selected filesystem");
+    progress(report, 4, "Format and mount selected filesystem")?;
     exec("mkfs.vfat", &["-F", "32", "-n", "EFI", &esp])?;
     if let Some(device) = &swap_device {
         exec("mkswap", &["-L", "SWAP", device])?;
@@ -117,7 +128,7 @@ fn install(c: &Config, tx: &Sender<Event>) -> Result<()> {
     fs::create_dir_all(format!("{ROOT}/boot"))?;
     exec("mount", &[&esp, &format!("{ROOT}/boot")])?;
 
-    progress(tx, 5, "Extract systemd stage3");
+    progress(report, 5, "Extract systemd stage3")?;
     exec(
         "tar",
         &[
@@ -130,10 +141,10 @@ fn install(c: &Config, tx: &Sender<Event>) -> Result<()> {
         ],
     )?;
 
-    progress(tx, 6, "Configure filesystem, locale and network");
+    progress(report, 6, "Configure filesystem, locale and network")?;
     configure(c)?;
 
-    progress(tx, 7, "Prepare Gentoo chroot");
+    progress(report, 7, "Prepare Gentoo chroot")?;
     for part in ["proc", "sys", "dev", "run"] {
         fs::create_dir_all(format!("{ROOT}/{part}"))?;
     }
@@ -144,10 +155,10 @@ fn install(c: &Config, tx: &Sender<Event>) -> Result<()> {
     exec("mount", &["--make-rslave", &format!("{ROOT}/dev")])?;
     exec("mount", &["--bind", "/run", &format!("{ROOT}/run")])?;
 
-    progress(tx, 8, "Initialize Portage tree");
+    progress(report, 8, "Initialize Portage tree")?;
     inside(&["/usr/bin/emerge-webrsync"])?;
 
-    progress(tx, 9, "Install kernel, boot and essential packages");
+    progress(report, 9, "Install kernel, boot and essential packages")?;
     let mut packages = vec![
         "/usr/bin/emerge",
         "--noreplace",
@@ -176,7 +187,7 @@ fn install(c: &Config, tx: &Sender<Event>) -> Result<()> {
     inside(&packages)?;
     inside(&["/usr/bin/env", "locale-gen"])?;
 
-    progress(tx, 10, "Create accounts and credentials");
+    progress(report, 10, "Create accounts and credentials")?;
     inside_secret(
         &["/usr/sbin/chpasswd"],
         format!("root:{}\n", c.root_password).as_bytes(),
@@ -228,7 +239,7 @@ fn install(c: &Config, tx: &Sender<Event>) -> Result<()> {
         )?;
     }
 
-    progress(tx, 11, "Enable services and configure bootloader");
+    progress(report, 11, "Enable services and configure bootloader")?;
     let mut services = vec![
         "/usr/bin/systemctl",
         "enable",
@@ -251,7 +262,7 @@ fn install(c: &Config, tx: &Sender<Event>) -> Result<()> {
     symlink("../run/systemd/resolve/stub-resolv.conf", &resolver)?;
     install_bootloader(c)?;
 
-    progress(tx, 12, "Sync disks and safely unmount");
+    progress(report, 12, "Sync disks and safely unmount")?;
     exec("sync", &[])?;
     exec("umount", &["-R", ROOT])?;
     guard.0 = false;

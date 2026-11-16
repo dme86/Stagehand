@@ -1,6 +1,6 @@
 [package]
 name = "stagehand"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 description = "A guided, terminal-based Gentoo Linux installer"
 license = "MIT"
@@ -12,3 +12,6 @@ crossterm = "0.28"
 ratatui = "0.29"
 serde_json = "1"
 sha2 = "0.10"
+
+serde = { version = "1", features = ["derive"] }
+libc = "0.2"
