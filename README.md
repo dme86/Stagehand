@@ -16,29 +16,9 @@ review every decision, and install only after explicit confirmation.
 
 ## One screen, all the important choices
 
-```text
-┌ Welcome ────────────────────────────────────────────────────────────────┐
-│ STAGEHAND              Gentoo installer · v0.5.7 · AMD64 / x86_64       │
-├ Installation settings ───┬ Details ─────────────────────────────────────┤
-│ › Storage                │ Welcome to Stagehand.                       │
-│     /dev/vda · Btrfs     │                                            │
-│ › System                 │ Installation profile:                       │
-│     Gentoo · Base Stage3 │ • Systemd Stage3: base / desktop            │
-│ › Kernel & boot          │ • Kernel: gentoo-kernel-bin                  │
-│     bin · systemd-boot   │ • Bootloader: systemd-boot                  │
-│ › Network                │ • Filesystem: Btrfs / ext4                  │
-│     systemd-networkd    │ • Network: networkd / NetworkManager        │
-│ › Users                  │ • Portage: binary packages preferred        │
-│     dan                 │                                            │
-│ › Portage                │ Enter any category to configure it.         │
-│     Binpkg · Auto jobs  │ The final ERASE confirmation is required.   │
-│ › System tools           │                                            │
-│     nano · Cron off     │                                            │
-│ ▶ Install Gentoo         │                                            │
-├ Keys ────────────────────┴────────────────────────────────────────────┤
-│ ↑↓/j/k Navigate   Enter Open   q Quit                                  │
-└────────────────────────────────────────────────────────────────────────┘
-```
+![Stagehand v0.5.7 – live Gentoo installer screenshot on ARM64 with Gruvbox colors](assets/stagehand-screenshot.webp)
+
+*Live screenshot of Stagehand running on ARM64 / aarch64. Configured defaults appear in Gruvbox green; required settings that are still missing are highlighted in amber.*
 
 The main menu is organized into **Storage**, **System**, **Kernel & boot**, **Network**, **Users**, **Portage** and **System tools** submenus, plus a separate final installation action.
 
