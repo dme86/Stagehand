@@ -1,4 +1,7 @@
-use crate::{config::Config, disks};
+use crate::{
+    config::{Bootloader, Config},
+    disks,
+};
 use anyhow::{anyhow, bail, Context, Result};
 use sha2::{Digest, Sha256};
 use std::{
@@ -124,11 +127,14 @@ fn install(c: &Config, tx: &Sender<Event>) -> Result<()> {
         "/usr/bin/emerge",
         "--noreplace",
         "sys-kernel/installkernel",
-        "sys-kernel/gentoo-kernel-bin",
+        c.kernel.package(),
         "sys-kernel/linux-firmware",
         "sys-fs/btrfs-progs",
         "app-admin/sudo",
     ];
+    if c.bootloader == Bootloader::Grub {
+        packages.push("sys-boot/grub");
+    }
     if c.ssh_enabled {
         packages.push("net-misc/openssh");
     }
@@ -185,7 +191,7 @@ fn install(c: &Config, tx: &Sender<Event>) -> Result<()> {
         )?;
     }
 
-    progress(tx, 11, "Enable services and configure systemd-boot");
+    progress(tx, 11, "Enable services and configure bootloader");
     let mut services = vec![
         "/usr/bin/systemctl",
         "enable",
@@ -200,31 +206,7 @@ fn install(c: &Config, tx: &Sender<Event>) -> Result<()> {
     let resolver = Path::new(ROOT).join("etc/resolv.conf");
     fs::remove_file(&resolver)?;
     symlink("../run/systemd/resolve/stub-resolv.conf", &resolver)?;
-    inside(&[
-        "/usr/bin/bootctl",
-        "--esp-path=/boot",
-        "install",
-        "--no-variables",
-    ])?;
-    write(
-        "boot/loader/loader.conf",
-        "default gentoo-*\ntimeout 3\neditor no\n",
-    )?;
-    let entries = Path::new(ROOT).join("boot/loader/entries");
-    let ukis = Path::new(ROOT).join("boot/EFI/Linux");
-    let has_entries = entries.is_dir()
-        && fs::read_dir(entries)?.any(|e| {
-            e.ok()
-                .is_some_and(|f| f.path().extension().is_some_and(|s| s == "conf"))
-        });
-    let has_ukis = ukis.is_dir()
-        && fs::read_dir(ukis)?.any(|e| {
-            e.ok()
-                .is_some_and(|f| f.path().extension().is_some_and(|s| s == "efi"))
-        });
-    if !has_entries && !has_ukis {
-        bail!("No systemd-boot entry or UKI found. Inspect the log before rebooting.");
-    }
+    install_bootloader(c)?;
 
     progress(tx, 12, "Sync disks and safely unmount");
     exec("sync", &[])?;
@@ -270,12 +252,29 @@ fn preflight(c: &Config) -> Result<()> {
     }
     Ok(())
 }
-fn arch() -> Result<&'static str> {
-    match std::env::consts::ARCH {
-        "x86_64" => Ok("amd64"),
-        "aarch64" => Ok("arm64"),
-        other => bail!("Unsupported architecture: {other}"),
+pub fn arch() -> Result<&'static str> {
+    let out = Command::new("uname")
+        .arg("-m")
+        .output()
+        .context("Detect running Linux architecture")?;
+    if !out.status.success() {
+        bail!("Cannot read live-system architecture from uname");
     }
+    let actual = String::from_utf8(out.stdout)?;
+    let detected = match actual.trim() {
+        "x86_64" | "amd64" => "amd64",
+        "aarch64" | "arm64" => "arm64",
+        other => bail!("Unsupported live system architecture: {other}"),
+    };
+    let binary = match std::env::consts::ARCH {
+        "x86_64" => "amd64",
+        "aarch64" => "arm64",
+        other => bail!("Stagehand executable architecture is unsupported: {other}"),
+    };
+    if detected != binary {
+        bail!("Stagehand binary and Linux live system architectures differ; cross-architecture installs are not supported.");
+    }
+    Ok(detected)
 }
 fn fetch_stage3(a: &str) -> Result<PathBuf> {
     let base = format!("{MIRROR}/releases/{a}/autobuilds/current-stage3-{a}-systemd");
@@ -293,11 +292,7 @@ fn fetch_stage3(a: &str) -> Result<PathBuf> {
         "curl",
         &["-fsSL", "--retry", "3", &format!("{base}/{name}.sha256")],
     )?;
-    let expected = checksum
-        .split_whitespace()
-        .find(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
-        .ok_or_else(|| anyhow!("Malformed stage3 SHA-256 checksum"))?
-        .to_ascii_lowercase();
+    let expected = digest_for(&checksum, &name)?;
     let cache = Path::new("/tmp/stagehand-cache");
     fs::create_dir_all(cache)?;
     let file = cache.join(&name);
@@ -343,6 +338,21 @@ fn parse_name(index: &str, a: &str) -> Result<String> {
         .next()
         .ok_or_else(|| anyhow!("Stage3 manifest contains no supported archive"))
 }
+fn digest_for(document: &str, filename: &str) -> Result<String> {
+    for line in document.lines() {
+        let parts: Vec<_> = line.split_whitespace().collect();
+        if parts.len() >= 2
+            && parts[0].len() == 64
+            && parts[0].bytes().all(|c| c.is_ascii_hexdigit())
+            && (parts[1] == filename
+                || parts[1] == format!("*{filename}")
+                || parts[1] == format!("./{filename}"))
+        {
+            return Ok(parts[0].to_ascii_lowercase());
+        }
+    }
+    bail!("Missing SHA-256 checksum for {filename}")
+}
 fn sha256(path: &Path) -> Result<String> {
     let mut f = File::open(path)?;
     let mut sha = Sha256::new();
@@ -356,6 +366,59 @@ fn sha256(path: &Path) -> Result<String> {
     }
     Ok(format!("{:x}", sha.finalize()))
 }
+fn install_bootloader(config: &Config) -> Result<()> {
+    match config.bootloader {
+        Bootloader::SystemdBoot => {
+            inside(&[
+                "/usr/bin/bootctl",
+                "--esp-path=/boot",
+                "install",
+                "--no-variables",
+            ])?;
+            write(
+                "boot/loader/loader.conf",
+                "default gentoo-*\ntimeout 3\neditor no\n",
+            )?;
+            let entries = Path::new(ROOT).join("boot/loader/entries");
+            let ukis = Path::new(ROOT).join("boot/EFI/Linux");
+            let has_entries = entries.is_dir()
+                && fs::read_dir(entries)?.any(|e| {
+                    e.ok()
+                        .is_some_and(|f| f.path().extension().is_some_and(|x| x == "conf"))
+                });
+            let has_ukis = ukis.is_dir()
+                && fs::read_dir(ukis)?.any(|e| {
+                    e.ok()
+                        .is_some_and(|f| f.path().extension().is_some_and(|x| x == "efi"))
+                });
+            if !has_entries && !has_ukis {
+                bail!("No systemd-boot entry or UKI found. Inspect the kernel install logs before rebooting.");
+            }
+        }
+        Bootloader::Grub => {
+            let target = match std::env::consts::ARCH {
+                "x86_64" => "x86_64-efi",
+                "aarch64" => "arm64-efi",
+                _ => bail!("Unsupported GRUB target architecture"),
+            };
+            inside(&[
+                "/usr/sbin/grub-install",
+                &format!("--target={target}"),
+                "--efi-directory=/boot",
+                "--bootloader-id=Gentoo",
+                "--removable",
+                "--no-nvram",
+            ])?;
+            inside(&["/usr/sbin/grub-mkconfig", "-o", "/boot/grub/grub.cfg"])?;
+            let grub = Path::new(ROOT).join("boot/grub/grub.cfg");
+            if !grub.is_file() || fs::metadata(&grub)?.len() == 0 {
+                bail!("GRUB failed to produce a usable configuration.");
+            }
+        }
+    }
+    Ok(())
+}
+
 fn configure(c: &Config) -> Result<()> {
     write("etc/fstab", "# Stagehand\nLABEL=ROOT / btrfs noatime,compress=zstd,space_cache=v2,subvol=@ 0 0\nLABEL=ROOT /home btrfs noatime,compress=zstd,space_cache=v2,subvol=@home 0 0\nLABEL=EFI /boot vfat defaults,noatime 0 2\n")?;
     write("etc/hostname", &format!("{}\n", c.hostname))?;
@@ -373,8 +436,13 @@ fn configure(c: &Config) -> Result<()> {
         "etc/systemd/network/20-wired.network",
         "[Match]\nName=en* eth*\n\n[Network]\nDHCP=yes\n",
     )?;
-    write("etc/portage/package.use/stagehand",
-        "sys-apps/systemd boot\nsys-apps/systemd-utils boot kernel-install\nsys-kernel/installkernel systemd systemd-boot dracut\n")?;
+    let boot_use = match c.bootloader {
+        Bootloader::SystemdBoot =>
+            "sys-apps/systemd boot\nsys-apps/systemd-utils boot kernel-install\nsys-kernel/installkernel systemd systemd-boot dracut -grub\n",
+        Bootloader::Grub =>
+            "sys-kernel/installkernel dracut grub -systemd-boot\n",
+    };
+    write("etc/portage/package.use/stagehand", boot_use)?;
     write(
         "etc/portage/package.license/stagehand",
         "sys-kernel/linux-firmware linux-fw-redistributable\n",
@@ -477,5 +545,15 @@ mod tests {
             "stage3-amd64-systemd-20261116.tar.xz"
         );
         assert!(parse_name("../bad 42", "amd64").is_err());
+    }
+    #[test]
+    fn checksum_is_bound_to_archive_name() {
+        let checksum = format!("{}  another.tar.xz", "a".repeat(64));
+        assert!(digest_for(&checksum, "stage3-amd64-systemd.tar.xz").is_err());
+        let correct = format!("{}  stage3-amd64-systemd.tar.xz", "a".repeat(64));
+        assert_eq!(
+            digest_for(&correct, "stage3-amd64-systemd.tar.xz").unwrap(),
+            "a".repeat(64)
+        );
     }
 }
