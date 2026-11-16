@@ -3,7 +3,11 @@
 //! live ISO, and future kernel-install runs reuse the token on disk.
 use crate::config::Bootloader;
 use anyhow::{bail, Context, Result};
-use std::{fs::{self, File}, io::Read, path::Path};
+use std::{
+    fs::{self, File},
+    io::Read,
+    path::Path,
+};
 
 const PREFIX: &str = "gentoo-";
 const HEX: &[u8; 16] = b"0123456789abcdef";
@@ -19,7 +23,9 @@ fn hex(bytes: &[u8]) -> String {
 
 fn new_identity_values<R: Read>(random: &mut R) -> Result<(String, String)> {
     let mut machine = [0u8; 16];
-    random.read_exact(&mut machine).context("Read cryptographic machine-id entropy")?;
+    random
+        .read_exact(&mut machine)
+        .context("Read cryptographic machine-id entropy")?;
     // Set the conventional UUID version/variant bits; the file format stays
     // the 32 lowercase hexadecimal characters required by systemd.
     machine[6] = (machine[6] & 0x0f) | 0x40;
@@ -29,20 +35,26 @@ fn new_identity_values<R: Read>(random: &mut R) -> Result<(String, String)> {
     // Independent randomness: do not publish/derive the sensitive
     // machine-id in filenames on an unencrypted EFI system partition.
     let mut token_bytes = [0u8; 12];
-    random.read_exact(&mut token_bytes).context("Read unique boot entry token entropy")?;
+    random
+        .read_exact(&mut token_bytes)
+        .context("Read unique boot entry token entropy")?;
     let token = format!("{PREFIX}{}", hex(&token_bytes));
     Ok((machine_id, token))
 }
 
 fn valid_machine_id(value: &str) -> bool {
     value.len() == 32
-        && value.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
         && value.bytes().any(|b| b != b'0')
 }
 fn valid_entry_token(value: &str) -> bool {
     value.strip_prefix(PREFIX).is_some_and(|suffix| {
         suffix.len() == 24
-            && suffix.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            && suffix
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
     })
 }
 
@@ -50,10 +62,12 @@ fn write_new(root: &Path, path: &str, value: &str) -> Result<()> {
     let target = root.join(path);
     fs::create_dir_all(target.parent().context("Missing parent directory")?)?;
     if target.is_symlink() {
-        bail!("Refusing to write boot identity through symlink {}", target.display());
+        bail!(
+            "Refusing to write boot identity through symlink {}",
+            target.display()
+        );
     }
-    fs::write(&target, format!("{value}\n"))
-        .with_context(|| format!("Write {}", target.display()))
+    fs::write(&target, format!("{value}\n")).with_context(|| format!("Write {}", target.display()))
 }
 
 /// Called *after* extracting stage3, *before* any Portage/kernel-install
@@ -75,8 +89,8 @@ pub fn prepare(root: &Path, loader: Bootloader) -> Result<()> {
 }
 
 pub fn machine_id(root: &Path) -> Result<String> {
-    let value = fs::read_to_string(root.join("etc/machine-id"))
-        .context("Missing installed machine-id")?;
+    let value =
+        fs::read_to_string(root.join("etc/machine-id")).context("Missing installed machine-id")?;
     let value = value.trim();
     if !valid_machine_id(value) {
         bail!("Installed system does not have a valid stable machine-id");
@@ -129,7 +143,9 @@ mod tests {
     #[test]
     fn preparation_sets_a_unique_persistent_machine_id_before_kernel_install() {
         let root = std::env::temp_dir().join(format!(
-            "stagehand-identity-prep-{}-{:?}", std::process::id(), std::thread::current().id()
+            "stagehand-identity-prep-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
         ));
         let result = (|| -> Result<()> {
             fs::create_dir_all(root.join("etc/kernel"))?;
@@ -140,7 +156,10 @@ mod tests {
             let token = entry_token(&root)?;
             assert_ne!(machine, "0".repeat(32));
             assert!(!token.contains(&machine));
-            assert_eq!(fs::read_to_string(root.join("etc/kernel/install.conf"))?, "layout=bls\n");
+            assert_eq!(
+                fs::read_to_string(root.join("etc/kernel/install.conf"))?,
+                "layout=bls\n"
+            );
             // Simulate a later read on a subsequent boot/kernel update:
             assert_eq!(machine_id(&root)?, machine);
             assert_eq!(entry_token(&root)?, token);
@@ -152,12 +171,17 @@ mod tests {
     #[test]
     fn independent_identity_roundtrips() {
         let root = std::env::temp_dir().join(format!(
-            "stagehand-identities-{}-{:?}", std::process::id(), std::thread::current().id()
+            "stagehand-identities-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
         ));
         let result = (|| -> Result<()> {
             fs::create_dir_all(root.join("etc/kernel"))?;
             fs::write(root.join("etc/machine-id"), format!("{}\n", "a".repeat(32)))?;
-            fs::write(root.join("etc/kernel/entry-token"), format!("gentoo-{}\n", "b".repeat(24)))?;
+            fs::write(
+                root.join("etc/kernel/entry-token"),
+                format!("gentoo-{}\n", "b".repeat(24)),
+            )?;
             assert_eq!(machine_id(&root)?, "a".repeat(32));
             assert_eq!(entry_token(&root)?, format!("gentoo-{}", "b".repeat(24)));
             fs::write(root.join("etc/machine-id"), "")?;

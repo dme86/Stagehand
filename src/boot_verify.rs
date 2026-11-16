@@ -140,7 +140,10 @@ pub fn verify_systemd_entries(root: &Path, filesystem: Filesystem) -> Result<()>
         bail!("kernel-install layout is not bls");
     }
     let loader = fs::read_to_string(root.join("boot/loader/loader.conf"))?;
-    if !loader.lines().any(|line| line.trim() == format!("default {default}")) {
+    if !loader
+        .lines()
+        .any(|line| line.trim() == format!("default {default}"))
+    {
         bail!("systemd-boot default does not match the installation's entry token");
     }
     let expected_cmdline = fs::read_to_string(root.join("etc/kernel/cmdline"))?;
@@ -313,8 +316,16 @@ mod tests {
     #[test]
     fn systemd_entry_must_match_kernel_initrd_cmdline_and_default() {
         let root = root();
-        write_file(&root, "etc/machine-id", b"0123456789abcdef0123456789abcdef\n");
-        write_file(&root, "etc/kernel/entry-token", b"gentoo-0123456789abcdef01234567\n");
+        write_file(
+            &root,
+            "etc/machine-id",
+            b"0123456789abcdef0123456789abcdef\n",
+        );
+        write_file(
+            &root,
+            "etc/kernel/entry-token",
+            b"gentoo-0123456789abcdef01234567\n",
+        );
         write_file(&root, "etc/kernel/install.conf", b"layout=bls\n");
         write_file(
             &root,
@@ -335,10 +346,22 @@ mod tests {
         // to a different token or to an empty machine-id.
         write_file(&root, "etc/machine-id", b"");
         assert!(verify_systemd_entries(&root, Filesystem::Btrfs).is_err());
-        write_file(&root, "etc/machine-id", b"0123456789abcdef0123456789abcdef\n");
-        write_file(&root, "boot/loader/loader.conf", b"default gentoo-*\ntimeout 3\n");
+        write_file(
+            &root,
+            "etc/machine-id",
+            b"0123456789abcdef0123456789abcdef\n",
+        );
+        write_file(
+            &root,
+            "boot/loader/loader.conf",
+            b"default gentoo-*\ntimeout 3\n",
+        );
         assert!(verify_systemd_entries(&root, Filesystem::Btrfs).is_err());
-        write_file(&root, "boot/loader/loader.conf", b"default gentoo-0123456789abcdef01234567-*\ntimeout 3\n");
+        write_file(
+            &root,
+            "boot/loader/loader.conf",
+            b"default gentoo-0123456789abcdef01234567-*\ntimeout 3\n",
+        );
         write_file(
             &root,
             "boot/loader/entries/gentoo-0123456789abcdef01234567-6.12.conf",
