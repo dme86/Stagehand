@@ -1,3 +1,4 @@
+mod boot_identity;
 mod boot_verify;
 mod config;
 mod disks;

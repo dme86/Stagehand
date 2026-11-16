@@ -1,5 +1,5 @@
 use crate::{
-    boot_verify,
+    boot_identity, boot_verify,
     config::{Bootloader, Config, Filesystem, Locale, Network, Stage3, Swap},
     disks,
 };
@@ -658,16 +658,25 @@ fn initramfs_candidates(root: &Path, loader: Bootloader) -> Result<Vec<String>> 
 fn install_bootloader(config: &Config) -> Result<()> {
     match config.bootloader {
         Bootloader::SystemdBoot => {
+            // Read the exact token used by kernel-install earlier, rather
+            // than inferring from a machine-id or hardcoding "gentoo".
+            let token = boot_identity::entry_token(Path::new(ROOT))?;
+            let token_arg = format!("--entry-token=literal:{token}");
             inside(&[
                 "/usr/bin/bootctl",
                 "--esp-path=/boot",
-                "--entry-token=literal:gentoo",
+                &token_arg,
                 "install",
                 "--no-variables",
             ])?;
+            // bootctl must not silently switch the entry-token.
+            if boot_identity::entry_token(Path::new(ROOT))? != token {
+                bail!("bootctl changed the kernel-install entry token");
+            }
+            let default = boot_identity::loader_default(&token)?;
             write(
                 "boot/loader/loader.conf",
-                "default gentoo-*\ntimeout 3\neditor no\n",
+                &format!("default {default}\ntimeout 3\neditor no\n"),
             )?;
             // Inspect the *default-selected* BLS entries, referenced
             // kernel+initramfs, root cmdline and actual EFI loader binaries.
@@ -742,12 +751,10 @@ fn configure(c: &Config) -> Result<()> {
     }
     write("etc/fstab", &fstab)?;
     write("etc/kernel/cmdline", cmdline)?;
-    if c.bootloader == Bootloader::SystemdBoot {
-        // Keep the loader default and kernel-install's BLS entries in sync,
-        // even when /etc/machine-id is generated only on first boot.
-        write("etc/kernel/entry-token", "gentoo\n")?;
-        write("etc/kernel/install.conf", "layout=bls\n")?;
-    }
+    // Generate this installation's private machine-id and separate,
+    // publicly visible BLS token *before* installkernel sees the target.
+    // Neither value comes from the live ISO or changes on first boot.
+    boot_identity::prepare(Path::new(ROOT), c.bootloader)?;
     // Dracut reads /etc/dracut.conf.d during kernel installation inside
     // the chroot. Write this BEFORE Portage installs gentoo-kernel(-bin).
     write("etc/dracut.conf.d/90-stagehand.conf", DRACUT_CONFIG)?;
@@ -779,8 +786,6 @@ fn configure(c: &Config) -> Result<()> {
         Locale::German => "en_US.UTF-8 UTF-8\nde_DE.UTF-8 UTF-8\n",
     };
     write("etc/locale.gen", locale_gen)?;
-    // Do not copy the temporary live ISO machine identity into the new system.
-    write("etc/machine-id", "")?;
     match c.network {
         Network::Networkd => write(
             "etc/systemd/network/20-wired.network",
