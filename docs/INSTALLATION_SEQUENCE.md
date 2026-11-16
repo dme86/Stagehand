@@ -19,7 +19,7 @@ in a worker process after the typed disk erase confirmation.
 | 6. Initial configuration | Live ISO, writing into installed root | Create `fstab`, `hostname`, `hosts`, timezone, locale, console keymap, network config, `/etc/kernel/cmdline`, installkernel USE flags, firmware license and Portage settings; copy live DNS resolver for chroot |
 | 7. Prepare chroot | Live ISO | Mount proc, rbind sys and dev with slave propagation, bind run; verify **all required mountpoints** (including root, ESP and Btrfs home), Stage3 identity, `fstab`, Portage config and DNS; run **`env-update` inside chroot** |
 | 8. Repository | Gentoo chroot, login shell | Source **`/etc/profile`** (after env-update); run `emerge-webrsync` |
-| 9. Packages/kernel | Gentoo chroot, login shell | **First update `sys-apps/systemd` with the `boot` USE flag for systemd-boot**, then install/update `sys-kernel/installkernel` and GRUB (if selected) with `--newuse`; **only then** install the selected distribution kernel and remaining packages; generate locales |
+| 9. Packages/kernel | Gentoo chroot, login shell | **First update `sys-apps/systemd` with the `boot` USE flag for systemd-boot**, then install/update `sys-kernel/installkernel` and GRUB (if selected) with `--newuse`; **only then** install Dracut, firmware and Btrfs tools (when selected), the distribution kernel and remaining packages; validate the initramfs with lsinitrd; generate locales |
 | 10. Users | Gentoo chroot | Set credentials through stdin, create administrator, validate sudoers, optionally configure key-only SSH |
 | 11. Services/boot | Gentoo chroot | Enable selected system services; switch installed resolver to systemd-resolved; **recheck ESP mounts**; install EFI bootloader and verify boot artifacts / GRUB entries; GRUB Btrfs roots require `rootflags=subvol=@` |
 | 12. Finish | Live ISO | Sync, recursively unmount chroot and installed filesystems; worker records final state |
@@ -32,7 +32,7 @@ in a worker process after the typed disk erase confirmation.
   be written **after extraction** and **before Portage runs**.
 - `/proc`, `/sys`, `/dev`, `/run` and a usable `/etc/resolv.conf` are
   needed inside the chroot before synchronizing or installing packages.
-- The `installkernel` and systemd boot USE flags and `/etc/kernel/cmdline` must exist
+- The `installkernel` and systemd boot USE flags, `/etc/kernel/cmdline`, and `/etc/dracut.conf.d/90-stagehand.conf` must exist
   **before** the distribution kernel is emerged. Rebuilding `systemd[boot]`
   and installing `installkernel`
   in separate transactions avoids relying on the ordering of one big package
@@ -44,6 +44,19 @@ in a worker process after the typed disk erase confirmation.
 - A generated config or a compiled Rust binary does not prove the system will
   boot. Stagehand detects missing mountpoints and invalid bootloader configs,
   but end-to-end UEFI QEMU tests are still needed.
+
+
+### Generating Dracut initramfs inside the chroot
+
+Stagehand writes `hostonly="no"` and `hostonly_cmdline="no"` into
+`/etc/dracut.conf.d/90-stagehand.conf` **before** kernel installation.
+The installkernel hook runs inside the target Gentoo chroot and cannot
+accidentally embed the live ISO's kernel command line. Dracut, Linux
+firmware and selected filesystem utilities are installed first.
+
+The generated image is checked against the BLS entry (systemd-boot) or
+a matching kernel version (GRUB), then inspected by `lsinitrd -m` in the
+Gentoo chroot. Any missing or unreadable initramfs stops installation.
 
 ## Validation
 

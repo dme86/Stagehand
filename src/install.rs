@@ -17,6 +17,15 @@ pub const STEP_COUNT: usize = 12;
 const ROOT: &str = "/mnt/stagehand";
 const MIRROR: &str = "https://distfiles.gentoo.org";
 
+// Dracut 106+ defaults to host-only mode when invoked by installkernel.
+// During a live ISO installation that may detect the *installer* hardware
+// instead of the system we are building. Never embed the live ISO cmdline.
+const DRACUT_CONFIG: &str = "\
+# Stagehand: generic initramfs for the installed Gentoo system.\n\
+# Never use the live ISO's devices or root= command line.\n\
+hostonly=\"no\"\n\
+hostonly_cmdline=\"no\"\n";
+
 /// Stable phase sequence for the TUI. The gauge measures completed phases,
 /// never elapsed time or estimated compilation/download progress.
 pub const PHASES: [&str; 12] = [
@@ -170,17 +179,18 @@ fn install(c: &Config, report: &mut impl FnMut(usize, &str) -> Result<()>) -> Re
     for command in boot_prerequisite_commands(c) {
         inside_profiled(&command)?;
     }
+    // The EFI partition is already mounted at /boot, and the Stagehand
+    // dracut configuration and root= cmdline are in place. Install the
+    // kernel separately so installkernel generates its initramfs now.
+    inside_profiled(&["/usr/bin/emerge", "--noreplace", c.kernel.package()])?;
+    verify_generated_initramfs(c.bootloader)?;
+
     let mut packages = vec![
         "/usr/bin/emerge",
         "--noreplace",
-        c.kernel.package(),
-        "sys-kernel/linux-firmware",
         "app-admin/sudo",
         "sys-apps/locale-gen",
     ];
-    if c.filesystem == Filesystem::Btrfs {
-        packages.push("sys-fs/btrfs-progs");
-    }
     if c.ssh_enabled {
         packages.push("net-misc/openssh");
     }
@@ -305,6 +315,18 @@ fn boot_prerequisite_commands(c: &Config) -> Vec<Vec<&'static str>> {
         installkernel.push("sys-boot/grub");
     }
     commands.push(installkernel);
+    // These must be installed before the kernel's post-install hook runs:
+    // the Dracut plugin, firmware, and (for Btrfs roots) btrfs tools.
+    let mut prerequisites = vec![
+        "/usr/bin/emerge",
+        "--noreplace",
+        "sys-kernel/dracut",
+        "sys-kernel/linux-firmware",
+    ];
+    if c.filesystem == Filesystem::Btrfs {
+        prerequisites.push("sys-fs/btrfs-progs");
+    }
+    commands.push(prerequisites);
     commands
 }
 
@@ -504,6 +526,133 @@ fn ensure_sudoers_includes() -> Result<()> {
 
 /// GRUB must actually reference a Linux kernel, not just exist as a file.
 /// Btrfs @ must be included so Linux boots the right root subvolume.
+/// Dracut must be invoked by installkernel inside the target chroot, not
+/// against the live ISO kernel. The selected loader dictates where Gentoo's
+/// installkernel places the initramfs.
+fn verify_generated_initramfs(loader: Bootloader) -> Result<()> {
+    let dracut = fs::read_to_string(Path::new(ROOT).join("etc/dracut.conf.d/90-stagehand.conf"))
+        .context("Missing Stagehand Dracut configuration before kernel validation")?;
+    if dracut != DRACUT_CONFIG {
+        bail!("Dracut configuration changed during the install; refusing to accept an unverified initramfs");
+    }
+    let candidates = initramfs_candidates(Path::new(ROOT), loader)?;
+    if candidates.is_empty() {
+        bail!(
+            "No initramfs created by installkernel for {}. Check Portage and Dracut logs in {LOG}",
+            loader.label()
+        );
+    }
+    for path in candidates {
+        // This parses and decompresses the installed image using Dracut's
+        // own lsinitrd, inside the new Gentoo filesystem. It must succeed.
+        inside(&["/usr/bin/env", "lsinitrd", "-m", &path])
+            .with_context(|| format!("Generated initramfs {path} failed lsinitrd validation"))?;
+    }
+    Ok(())
+}
+
+/// Reject absolute paths outside the ESP and traversal in Boot Loader Spec
+/// entries; produce a chroot-visible path to the actual filesystem object.
+fn boot_entry_file(root: &Path, spec: &str) -> Result<String> {
+    use std::path::Component;
+    let relative = spec
+        .strip_prefix('/')
+        .context("Boot entry reference must be an absolute path within the EFI system partition")?;
+    if relative.is_empty()
+        || !Path::new(relative)
+            .components()
+            .all(|part| matches!(part, Component::Normal(_)))
+    {
+        bail!("Unsafe boot entry path {spec}");
+    }
+    let resolved = root.join("boot").join(relative);
+    require_boot_file(&resolved)?;
+    Ok(format!("/boot/{relative}"))
+}
+
+fn require_boot_file(path: &Path) -> Result<()> {
+    let meta = fs::metadata(path)
+        .with_context(|| format!("Missing installed boot artifact {}", path.display()))?;
+    if !meta.is_file() || meta.len() < 4096 {
+        bail!(
+            "Boot artifact {} is missing, not a file, or implausibly small",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+/// Extract the actual BLS initrd referenced by the kernel entry, rather
+/// than accepting an unrelated .img file anywhere under the ESP.
+fn initramfs_candidates(root: &Path, loader: Bootloader) -> Result<Vec<String>> {
+    let boot = root.join("boot");
+    let mut images = Vec::new();
+    match loader {
+        Bootloader::SystemdBoot => {
+            let entries = boot.join("loader/entries");
+            for file in fs::read_dir(&entries)
+                .with_context(|| format!("No systemd-boot entries under {}", entries.display()))?
+            {
+                let file = file?;
+                if file
+                    .path()
+                    .extension()
+                    .is_none_or(|extension| extension != "conf")
+                {
+                    continue;
+                }
+                let content = fs::read_to_string(file.path())?;
+                let mut kernel = None;
+                let mut initrd = None;
+                for line in content.lines() {
+                    let mut fields = line.split_whitespace();
+                    match fields.next() {
+                        Some("linux") => kernel = fields.next(),
+                        Some("initrd") => initrd = fields.next(),
+                        _ => {}
+                    }
+                }
+                let Some(initrd) = initrd else { continue };
+                let linux = kernel.context("systemd-boot entry has initrd but no linux image")?;
+                boot_entry_file(root, linux)?;
+                images.push(boot_entry_file(root, initrd)?);
+            }
+        }
+        Bootloader::Grub => {
+            for entry in fs::read_dir(&boot)? {
+                let entry = entry?;
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                let Some(version) = name
+                    .strip_prefix("initramfs-")
+                    .and_then(|v| v.strip_suffix(".img"))
+                else {
+                    continue;
+                };
+                if version.is_empty() {
+                    continue;
+                }
+                require_boot_file(&entry.path())?;
+                // Both traditional and systemd-based installkernel variants
+                // have used these kernel-image prefixes.
+                let has_kernel = ["vmlinuz-", "kernel-"].iter().any(|prefix| {
+                    require_boot_file(&boot.join(format!("{prefix}{version}"))).is_ok()
+                });
+                if !has_kernel {
+                    bail!("Initramfs {name} has no matching installed Linux kernel image");
+                }
+                images.push(format!("/boot/{name}"));
+            }
+        }
+    }
+    if images.is_empty() {
+        bail!("No installkernel-generated initramfs with a matching Linux kernel found on /boot");
+    }
+    images.sort();
+    images.dedup();
+    Ok(images)
+}
+
 fn validate_grub_config(document: &str, filesystem: Filesystem) -> Result<()> {
     let has_kernel = document.lines().any(|line| {
         let line = line.trim_start();
@@ -604,6 +753,9 @@ fn configure(c: &Config) -> Result<()> {
     }
     write("etc/fstab", &fstab)?;
     write("etc/kernel/cmdline", cmdline)?;
+    // Dracut reads /etc/dracut.conf.d during kernel installation inside
+    // the chroot. Write this BEFORE Portage installs gentoo-kernel(-bin).
+    write("etc/dracut.conf.d/90-stagehand.conf", DRACUT_CONFIG)?;
     write("etc/hostname", &format!("{}\n", c.hostname))?;
     write(
         "etc/hosts",
@@ -648,11 +800,15 @@ fn configure(c: &Config) -> Result<()> {
     }
     let boot_use = match c.bootloader {
         Bootloader::SystemdBoot => {
-            "sys-apps/systemd boot\nsys-kernel/installkernel systemd systemd-boot dracut -grub\n"
+            "sys-apps/systemd boot\nsys-kernel/installkernel systemd systemd-boot dracut -grub -uki -ukify -generic-uki\n"
         }
-        Bootloader::Grub => "sys-kernel/installkernel dracut grub -systemd -systemd-boot\n",
+        Bootloader::Grub => "sys-kernel/installkernel dracut grub -systemd -systemd-boot -uki -ukify -generic-uki\n",
     };
-    write("etc/portage/package.use/stagehand", boot_use)?;
+    let mut use_flags = boot_use.to_owned();
+    // Do not select the pregenerated UKI path; Stagehand verifies a
+    // conventional Dracut initramfs for both supported bootloaders.
+    use_flags.push_str("sys-kernel/gentoo-kernel-bin -generic-uki\n");
+    write("etc/portage/package.use/stagehand", &use_flags)?;
     write(
         "etc/portage/package.license/stagehand",
         "sys-kernel/linux-firmware linux-fw-redistributable\n",
@@ -875,15 +1031,86 @@ mod tests {
     fn kernel_bootstrap_is_explicitly_ordered() {
         let mut c = Config::default();
         let systemd = boot_prerequisite_commands(&c);
-        assert_eq!(systemd.len(), 2);
+        assert_eq!(systemd.len(), 3);
         assert_eq!(systemd[0].last(), Some(&"sys-apps/systemd"));
         assert_eq!(systemd[1].last(), Some(&"sys-kernel/installkernel"));
-        assert!(systemd.iter().all(|argv| argv.contains(&"--newuse")));
+        assert!(systemd[..2].iter().all(|argv| argv.contains(&"--newuse")));
+        assert!(systemd[2].contains(&"sys-kernel/dracut"));
+        assert!(systemd[2].contains(&"sys-kernel/linux-firmware"));
+        assert!(systemd[2].contains(&"sys-fs/btrfs-progs"));
+
         c.bootloader = Bootloader::Grub;
         let grub = boot_prerequisite_commands(&c);
-        assert_eq!(grub.len(), 1);
-        assert!(grub[0].contains(&"sys-kernel/installkernel"));
+        assert_eq!(grub.len(), 2);
         assert_eq!(grub[0].last(), Some(&"sys-boot/grub"));
+        assert!(grub[1].contains(&"sys-kernel/dracut"));
+
+        c.filesystem = Filesystem::Ext4;
+        let ext4 = boot_prerequisite_commands(&c);
+        assert!(!ext4[1].contains(&"sys-fs/btrfs-progs"));
+    }
+    #[test]
+    fn installer_dracut_conf_disables_live_host_detection() {
+        assert!(DRACUT_CONFIG.contains("hostonly=\"no\""));
+        assert!(DRACUT_CONFIG.contains("hostonly_cmdline=\"no\""));
+        assert!(!DRACUT_CONFIG.contains("hostonly=\"yes\""));
+    }
+    fn fake_boot_root() -> PathBuf {
+        let id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("stagehand-boot-test-{}-{id}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+    #[test]
+    fn systemd_boot_requires_an_initrd_and_matching_linux_file() {
+        let root = fake_boot_root();
+        let result = (|| -> Result<()> {
+            let boot = root.join("boot");
+            fs::create_dir_all(boot.join("loader/entries"))?;
+            fs::create_dir_all(boot.join("gentoo/6.12"))?;
+            fs::write(boot.join("gentoo/6.12/linux"), vec![1; 8192])?;
+            fs::write(boot.join("gentoo/6.12/initrd"), vec![1; 8192])?;
+            fs::write(boot.join("loader/entries/gentoo.conf"),
+                "title Gentoo\nlinux /gentoo/6.12/linux\ninitrd /gentoo/6.12/initrd\noptions root=LABEL=ROOT rw\n")?;
+            assert_eq!(
+                initramfs_candidates(&root, Bootloader::SystemdBoot)?,
+                vec!["/boot/gentoo/6.12/initrd"]
+            );
+            fs::remove_file(boot.join("gentoo/6.12/initrd"))?;
+            assert!(initramfs_candidates(&root, Bootloader::SystemdBoot).is_err());
+            fs::write(
+                boot.join("loader/entries/gentoo.conf"),
+                "linux /gentoo/6.12/linux\ninitrd /../../etc/shadow\n",
+            )?;
+            assert!(initramfs_candidates(&root, Bootloader::SystemdBoot).is_err());
+            Ok(())
+        })();
+        let _ = fs::remove_dir_all(root);
+        result.unwrap();
+    }
+    #[test]
+    fn grub_initramfs_must_match_a_kernel_version() {
+        let root = fake_boot_root();
+        let result = (|| -> Result<()> {
+            let boot = root.join("boot");
+            fs::create_dir_all(&boot)?;
+            fs::write(boot.join("initramfs-6.12-gentoo.img"), vec![1; 8192])?;
+            assert!(initramfs_candidates(&root, Bootloader::Grub).is_err());
+            fs::write(boot.join("vmlinuz-6.12-gentoo"), vec![1; 8192])?;
+            assert_eq!(
+                initramfs_candidates(&root, Bootloader::Grub)?,
+                vec!["/boot/initramfs-6.12-gentoo.img"]
+            );
+            fs::write(boot.join("initramfs-6.12-gentoo.img"), vec![1; 128])?;
+            assert!(initramfs_candidates(&root, Bootloader::Grub).is_err());
+            Ok(())
+        })();
+        let _ = fs::remove_dir_all(root);
+        result.unwrap();
     }
     #[test]
     fn handbook_installation_phase_order() {

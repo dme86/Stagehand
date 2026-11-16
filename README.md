@@ -10,7 +10,7 @@ A keyboard-first, guided **Gentoo Linux installer written in Rust**. Inspired by
 Stagehand lets you configure an installation in a clean terminal interface,
 review every decision, and install only after explicit confirmation.
 
-> **Early development (v0.5.1).** The installer has not yet passed an end-to-end
+> **Early development (v0.5.2).** The installer has not yet passed an end-to-end
 > UEFI VM boot test. **Do not run it against a disk containing valuable data.**
 > Use a disposable virtual machine until the installation and boot path are validated.
 
@@ -18,7 +18,7 @@ review every decision, and install only after explicit confirmation.
 
 ```text
 ┌ Welcome ────────────────────────────────────────────────────────────────┐
-│ STAGEHAND              Gentoo installer · v0.5.1 · AMD64 / x86_64       │
+│ STAGEHAND              Gentoo installer · v0.5.2 · AMD64 / x86_64       │
 ├ Installation settings ───┬ Details ─────────────────────────────────────┤
 │ › Storage                │ Welcome to Stagehand.                       │
 │     /dev/vda · Btrfs     │                                            │
@@ -163,6 +163,47 @@ time-based percentage. Failed commands and cleanup errors remain available
 in the log even after the TUI exits. The worker exits after installation
 success or failure; it is not a permanent daemon.
 
+## Safe initramfs creation from the live ISO
+
+Before installing any kernel, Stagehand writes
+`/etc/dracut.conf.d/90-stagehand.conf` **into the target Stage3**, not the
+live ISO, with the following explicit settings:
+
+```sh
+hostonly="no"
+hostonly_cmdline="no"
+```
+
+Dracut runs **inside the prepared Gentoo chroot** through the
+`sys-kernel/installkernel[dracut]` hook when `gentoo-kernel` or
+`gentoo-kernel-bin` is emerged. The generic image avoids depending on
+the installer ISO's hardware, and no live-ISO `root=` is embedded.
+The correct root is provided by the installed bootloader configuration.
+
+Stagehand installs Dracut, Linux firmware, and (for Btrfs roots)
+`btrfs-progs` **before the kernel**. It disables optional generic UKIs
+to keep the conventional Dracut initramfs path deterministic.
+
+After the kernel emerges, the installer checks the new files:
+
+- **systemd-boot:** validates the BLS entry under
+  `/boot/loader/entries/`, its referenced Linux image and initrd.
+- **GRUB:** validates `/boot/initramfs-<kernel-version>.img` and the
+  matching `vmlinuz-` or `kernel-` image.
+
+Missing or implausibly small files are rejected; then
+`lsinitrd -m <initramfs>` runs inside the Gentoo chroot to confirm
+that Dracut can inspect the generated image. A failed check prevents
+Stagehand from reporting a successful installation.
+
+A readable initramfs is not proof that the system can boot on every
+machine. An end-to-end UEFI installation/reboot test is still necessary.
+
+References: [Gentoo Dracut](https://wiki.gentoo.org/wiki/Dracut),
+[Installkernel](https://wiki.gentoo.org/wiki/Installkernel),
+[2025 Dracut hostonly change](https://www.gentoo.org/support/news-items/2025-02-03-dracut-hostonly.html)
+and [2026 hostonly_cmdline change](https://www.gentoo.org/support/news-items/2026-05-08-dracut-hostonly-cmdline.html).
+
 ## Detached installer worker
 
 The installer is split into two parts inside a **single Rust executable**:
@@ -247,7 +288,7 @@ test: use a disposable UEFI QEMU disk before trusting a new configuration.
 
 ## Gentoo Handbook coverage
 
-Stagehand v0.5.1 incorporates additional choices from the official
+Stagehand v0.5.2 incorporates additional choices from the official
 [Gentoo AMD64 Handbook](https://wiki.gentoo.org/wiki/Handbook:AMD64).
 Both AMD64 and ARM64 offer standard and desktop systemd Stage3 archives; desktop
 Stage3 includes extra development tools, **not a preinstalled graphical environment**.
