@@ -180,6 +180,12 @@ fn install(c: &Config, report: &mut impl FnMut(usize, &str) -> Result<()>) -> Re
     for command in boot_prerequisite_commands(c) {
         inside_profiled(&command)?;
     }
+    // Do not trust the package transaction alone: verify the installed
+    // Btrfs userspace executable *inside the target chroot* before any
+    // distribution-kernel hook generates an initramfs for the root volume.
+    for command in pre_kernel_filesystem_checks(c) {
+        inside(&command)?;
+    }
     // The EFI partition is already mounted at /boot, and the Stagehand
     // dracut configuration and root= cmdline are in place. Install the
     // kernel separately so installkernel generates its initramfs now.
@@ -294,6 +300,9 @@ fn install(c: &Config, report: &mut impl FnMut(usize, &str) -> Result<()>) -> Re
 /// Required installation order: systemd[boot] (when selected), then
 /// installkernel configured for the selected loader, then the kernel itself.
 /// Keeping this pure makes the ordering testable without disk I/O.
+/// Each command is a separate Portage transaction. This makes the
+/// filesystem tooling dependency explicit, not an implicit member of the
+/// kernel emerge transaction.
 fn boot_prerequisite_commands(c: &Config) -> Vec<Vec<&'static str>> {
     let mut commands = Vec::new();
     if c.bootloader == Bootloader::SystemdBoot {
@@ -316,19 +325,33 @@ fn boot_prerequisite_commands(c: &Config) -> Vec<Vec<&'static str>> {
         installkernel.push("sys-boot/grub");
     }
     commands.push(installkernel);
-    // These must be installed before the kernel's post-install hook runs:
-    // the Dracut plugin, firmware, and (for Btrfs roots) btrfs tools.
-    let mut prerequisites = vec![
+
+    // Btrfs tools are needed by Dracut when it constructs the root
+    // filesystem's initramfs. Install them *before* the dracut transaction
+    // and, critically, before installing gentoo-kernel(-bin).
+    if c.filesystem == Filesystem::Btrfs {
+        commands.push(vec![
+            "/usr/bin/emerge",
+            "--noreplace",
+            "sys-fs/btrfs-progs",
+        ]);
+    }
+    commands.push(vec![
         "/usr/bin/emerge",
         "--noreplace",
         "sys-kernel/dracut",
         "sys-kernel/linux-firmware",
-    ];
-    if c.filesystem == Filesystem::Btrfs {
-        prerequisites.push("sys-fs/btrfs-progs");
-    }
-    commands.push(prerequisites);
+    ]);
     commands
+}
+
+/// Check that Portage made the tools available in the *installed* system.
+/// Ext4 needs no Btrfs CLI check; the live ISO's Btrfs tools do not count.
+fn pre_kernel_filesystem_checks(c: &Config) -> Vec<Vec<&'static str>> {
+    match c.filesystem {
+        Filesystem::Btrfs => vec![vec!["/usr/bin/btrfs", "--version"]],
+        Filesystem::Ext4 => Vec::new(),
+    }
 }
 
 fn preflight(c: &Config) -> Result<()> {
@@ -1031,23 +1054,41 @@ mod tests {
     fn kernel_bootstrap_is_explicitly_ordered() {
         let mut c = Config::default();
         let systemd = boot_prerequisite_commands(&c);
-        assert_eq!(systemd.len(), 3);
+        assert_eq!(systemd.len(), 4);
         assert_eq!(systemd[0].last(), Some(&"sys-apps/systemd"));
         assert_eq!(systemd[1].last(), Some(&"sys-kernel/installkernel"));
         assert!(systemd[..2].iter().all(|argv| argv.contains(&"--newuse")));
-        assert!(systemd[2].contains(&"sys-kernel/dracut"));
-        assert!(systemd[2].contains(&"sys-kernel/linux-firmware"));
-        assert!(systemd[2].contains(&"sys-fs/btrfs-progs"));
+        assert_eq!(systemd[2].last(), Some(&"sys-fs/btrfs-progs"));
+        assert!(systemd[3].contains(&"sys-kernel/dracut"));
+        assert!(systemd[3].contains(&"sys-kernel/linux-firmware"));
+        assert!(!systemd[3].contains(&"sys-fs/btrfs-progs"));
+        assert_eq!(
+            pre_kernel_filesystem_checks(&c),
+            vec![vec!["/usr/bin/btrfs", "--version"]]
+        );
 
+        // Both GRUB and systemd-boot must install Btrfs tools first.
         c.bootloader = Bootloader::Grub;
         let grub = boot_prerequisite_commands(&c);
-        assert_eq!(grub.len(), 2);
+        assert_eq!(grub.len(), 3);
         assert_eq!(grub[0].last(), Some(&"sys-boot/grub"));
-        assert!(grub[1].contains(&"sys-kernel/dracut"));
+        assert_eq!(grub[1].last(), Some(&"sys-fs/btrfs-progs"));
+        assert!(grub[2].contains(&"sys-kernel/dracut"));
+        assert_eq!(
+            pre_kernel_filesystem_checks(&c),
+            vec![vec!["/usr/bin/btrfs", "--version"]]
+        );
 
         c.filesystem = Filesystem::Ext4;
         let ext4 = boot_prerequisite_commands(&c);
-        assert!(!ext4[1].contains(&"sys-fs/btrfs-progs"));
+        assert_eq!(ext4.len(), 2);
+        assert!(!ext4.iter().flatten().any(|item| *item == "sys-fs/btrfs-progs"));
+        assert!(pre_kernel_filesystem_checks(&c).is_empty());
+
+        c.bootloader = Bootloader::SystemdBoot;
+        let ext4_systemd = boot_prerequisite_commands(&c);
+        assert_eq!(ext4_systemd.len(), 3);
+        assert!(pre_kernel_filesystem_checks(&c).is_empty());
     }
     #[test]
     fn installer_dracut_conf_disables_live_host_detection() {

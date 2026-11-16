@@ -10,7 +10,7 @@ A keyboard-first, guided **Gentoo Linux installer written in Rust**. Inspired by
 Stagehand lets you configure an installation in a clean terminal interface,
 review every decision, and install only after explicit confirmation.
 
-> **Early development (v0.5.4).** The installer has not yet passed an end-to-end
+> **Early development (v0.5.5).** The installer has not yet passed an end-to-end
 > UEFI VM boot test. **Do not run it against a disk containing valuable data.**
 > Use a disposable virtual machine until the installation and boot path are validated.
 
@@ -18,7 +18,7 @@ review every decision, and install only after explicit confirmation.
 
 ```text
 ┌ Welcome ────────────────────────────────────────────────────────────────┐
-│ STAGEHAND              Gentoo installer · v0.5.4 · AMD64 / x86_64       │
+│ STAGEHAND              Gentoo installer · v0.5.5 · AMD64 / x86_64       │
 ├ Installation settings ───┬ Details ─────────────────────────────────────┤
 │ › Storage                │ Welcome to Stagehand.                       │
 │     /dev/vda · Btrfs     │                                            │
@@ -199,7 +199,7 @@ See the systemd
 and [bootctl](https://www.freedesktop.org/software/systemd/man/latest/bootctl.html)
 documentation.
 
-## Bootloader verification (v0.5.4)
+## Bootloader verification (v0.5.5)
 
 Stagehand now verifies the **installed EFI boot chain** after setting up
 the bootloader, rather than treating the existence of an entry file as proof.
@@ -236,6 +236,23 @@ boot entries and UUIDs without touching real disks.
 full firmware simulation, Secure Boot signature verification, or
 proof that a hardware-specific initramfs successfully boots. A
 complete QEMU/OVMF install-and-reboot test is still required.
+
+## Btrfs filesystem tools before kernel installation
+
+For a Btrfs root filesystem, Stagehand runs **a dedicated Portage transaction**
+to install `sys-fs/btrfs-progs` **before** installing Dracut and the kernel.
+The installation then executes `/usr/bin/btrfs --version` **inside the new
+Gentoo chroot**, not in the live ISO. If this fails, Stagehand aborts before
+`gentoo-kernel` or `gentoo-kernel-bin` can generate an initramfs.
+
+The explicit order is: bootloader prerequisites → Btrfs tools (Btrfs only)
+→ Dracut and Linux firmware → verify target Btrfs CLI (Btrfs only)
+→ Gentoo kernel → verify initramfs.
+
+For **ext4**, Stagehand neither installs nor checks Btrfs tools. Unit tests
+assert the ordering for both bootloaders and both supported root filesystems.
+This safeguards the package-install sequence but is not a substitute for
+the pending QEMU/OVMF first-boot integration test.
 
 ## Safe initramfs creation from the live ISO
 
@@ -362,7 +379,7 @@ test: use a disposable UEFI QEMU disk before trusting a new configuration.
 
 ## Gentoo Handbook coverage
 
-Stagehand v0.5.4 incorporates additional choices from the official
+Stagehand v0.5.5 incorporates additional choices from the official
 [Gentoo AMD64 Handbook](https://wiki.gentoo.org/wiki/Handbook:AMD64).
 Both AMD64 and ARM64 offer standard and desktop systemd Stage3 archives; desktop
 Stage3 includes extra development tools, **not a preinstalled graphical environment**.

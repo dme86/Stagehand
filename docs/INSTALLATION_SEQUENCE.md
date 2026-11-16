@@ -19,7 +19,7 @@ in a worker process after the typed disk erase confirmation.
 | 6. Initial configuration | Live ISO, writing into installed root | Create `fstab`, `hostname`, `hosts`, timezone, locale, console keymap, network config, `/etc/kernel/cmdline`, installkernel USE flags, firmware license and Portage settings; copy live DNS resolver for chroot |
 | 7. Prepare chroot | Live ISO | Mount proc, rbind sys and dev with slave propagation, bind run; verify **all required mountpoints** (including root, ESP and Btrfs home), Stage3 identity, `fstab`, Portage config and DNS; run **`env-update` inside chroot** |
 | 8. Repository | Gentoo chroot, login shell | Source **`/etc/profile`** (after env-update); run `emerge-webrsync` |
-| 9. Packages/kernel | Gentoo chroot, login shell | **First update `sys-apps/systemd` with the `boot` USE flag for systemd-boot**, then install/update `sys-kernel/installkernel` and GRUB (if selected) with `--newuse`; **only then** install Dracut, firmware and Btrfs tools (when selected), the distribution kernel and remaining packages; validate the initramfs with lsinitrd; generate locales |
+| 9. Packages/kernel | Gentoo chroot, login shell | **First update `sys-apps/systemd` with the `boot` USE flag for systemd-boot**, then install/update `sys-kernel/installkernel` and GRUB (if selected) with `--newuse`; **only then** install Btrfs tools in a dedicated transaction when selected; install Dracut and firmware; verify /usr/bin/btrfs in the target chroot for Btrfs roots; install the distribution kernel separately; validate the initramfs with lsinitrd; generate locales |
 | 10. Users | Gentoo chroot | Set credentials through stdin, create administrator, validate sudoers, optionally configure key-only SSH |
 | 11. Services/boot | Gentoo chroot | Enable selected system services; switch installed resolver to systemd-resolved; **recheck ESP mounts**; install EFI bootloader and verify BLS default, kernel/initramfs/root parameters, architecture-correct EFI files, or GRUB's default kernel entry against the real root UUID; GRUB Btrfs roots require `rootflags=subvol=@` |
 | 12. Finish | Live ISO | Sync, recursively unmount chroot and installed filesystems; worker records final state |
@@ -91,6 +91,16 @@ before the kernel triggers installkernel; they are not regenerated later.
 Preinitializing machine-id means `ConditionFirstBoot=yes` is not triggered.
 That is intentional for this interactive installer, which provisions users,
 locale, networking and services itself (not a reusable disk image).
+
+### Btrfs tool ordering and pre-kernel verification (v0.5.5)
+
+For Btrfs roots, Stagehand installs `sys-fs/btrfs-progs` in its **own**
+Portage invocation, **before** Dracut, Linux firmware and the kernel.
+Before emerging the selected Gentoo kernel it runs `/usr/bin/btrfs --version`
+**inside the target Gentoo chroot**, so a missing or unusable installed
+Btrfs tool stops the install without creating a questionable initramfs.
+For ext4 roots these steps are skipped. The package plan and check plan are
+unit-tested for both GRUB and systemd-boot.
 
 ## Validation
 
