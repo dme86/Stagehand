@@ -1,5 +1,5 @@
 use crate::{
-    config::{Bootloader, Config, Filesystem, Locale, Swap},
+    config::{Bootloader, Config, Filesystem, Locale, Network, Stage3, Swap},
     disks,
 };
 use anyhow::{anyhow, bail, Context, Result};
@@ -40,7 +40,7 @@ fn install(c: &Config, tx: &Sender<Event>) -> Result<()> {
     File::create(LOG)?;
 
     progress(tx, 2, "Fetch and verify Gentoo stage3");
-    let stage3 = fetch_stage3(arch()?)?;
+    let stage3 = fetch_stage3(arch()?, c.stage3)?;
 
     // This is the destructive boundary: all earlier steps are read-only.
     progress(tx, 3, "Partition selected disk");
@@ -164,6 +164,11 @@ fn install(c: &Config, tx: &Sender<Event>) -> Result<()> {
     if c.ssh_enabled {
         packages.push("net-misc/openssh");
     }
+    if c.network == Network::NetworkManager {
+        packages.push("net-misc/networkmanager");
+    }
+    if c.cronie { packages.push("sys-process/cronie"); }
+    if let Some(editor) = c.editor.package() { packages.push(editor); }
     inside(&packages)?;
     inside(&["/usr/bin/env", "locale-gen"])?;
 
@@ -223,12 +228,18 @@ fn install(c: &Config, tx: &Sender<Event>) -> Result<()> {
     let mut services = vec![
         "/usr/bin/systemctl",
         "enable",
-        "systemd-networkd",
         "systemd-resolved",
         "systemd-timesyncd",
     ];
+    match c.network {
+        Network::Networkd => services.push("systemd-networkd"),
+        Network::NetworkManager => services.push("NetworkManager"),
+    }
     if c.ssh_enabled {
         services.push("sshd");
+    }
+    if c.cronie {
+        services.push("cronie");
     }
     inside(&services)?;
     let resolver = Path::new(ROOT).join("etc/resolv.conf");
@@ -326,18 +337,19 @@ pub fn arch() -> Result<&'static str> {
     }
     Ok(detected)
 }
-fn fetch_stage3(a: &str) -> Result<PathBuf> {
-    let base = format!("{MIRROR}/releases/{a}/autobuilds/current-stage3-{a}-systemd");
+fn fetch_stage3(a: &str, flavor: Stage3) -> Result<PathBuf> {
+    let prefix = flavor.archive_prefix(a);
+    let base = format!("{MIRROR}/releases/{a}/autobuilds/current-{prefix}");
     let index = output(
         "curl",
         &[
             "-fsSL",
             "--retry",
             "3",
-            &format!("{base}/latest-stage3-{a}-systemd.txt"),
+            &format!("{base}/latest-{prefix}.txt"),
         ],
     )?;
-    let name = parse_name(&index, a)?;
+    let name = parse_name(&index, &prefix)?;
     let checksum = output(
         "curl",
         &["-fsSL", "--retry", "3", &format!("{base}/{name}.sha256")],
@@ -368,7 +380,7 @@ fn fetch_stage3(a: &str) -> Result<PathBuf> {
     }
     Ok(file)
 }
-fn parse_name(index: &str, a: &str) -> Result<String> {
+fn parse_name(index: &str, prefix: &str) -> Result<String> {
     index
         .lines()
         .filter_map(|line| {
@@ -377,7 +389,7 @@ fn parse_name(index: &str, a: &str) -> Result<String> {
             let size = fields.next()?;
             if fields.next().is_some()
                 || size.parse::<u64>().is_err()
-                || !name.starts_with(&format!("stage3-{a}-systemd-"))
+                || !name.starts_with(&format!("{prefix}-"))
                 || !(name.ends_with(".tar.xz") || name.ends_with(".tar.zst"))
                 || name.contains('/')
             {
@@ -540,10 +552,16 @@ fn configure(c: &Config) -> Result<()> {
     write("etc/locale.gen", locale_gen)?;
     // Do not copy the temporary live ISO machine identity into the new system.
     write("etc/machine-id", "")?;
-    write(
-        "etc/systemd/network/20-wired.network",
-        "[Match]\nName=en* eth*\n\n[Network]\nDHCP=yes\n",
-    )?;
+    match c.network {
+        Network::Networkd => write(
+            "etc/systemd/network/20-wired.network",
+            "[Match]\nName=en* eth*\n\n[Network]\nDHCP=yes\n",
+        )?,
+        Network::NetworkManager => {
+            write("etc/NetworkManager/conf.d/10-stagehand.conf",
+                "[main]\ndns=systemd-resolved\n")?;
+        }
+    }
     let boot_use = match c.bootloader {
         Bootloader::SystemdBoot => {
             "sys-apps/systemd boot\nsys-kernel/installkernel systemd systemd-boot dracut -grub\n"
@@ -562,6 +580,9 @@ fn configure(c: &Config) -> Result<()> {
         conf.write_all(b"\n# Stagehand: prefer matching binary packages\nFEATURES=\"${FEATURES} getbinpkg\"\nEMERGE_DEFAULT_OPTS=\"${EMERGE_DEFAULT_OPTS} --getbinpkg=y --usepkg=y\"\nPORT_LOGDIR=\"/var/log/portage\"\n")?;
     } else {
         conf.write_all(b"\n# Stagehand: source-only builds\nFEATURES=\"${FEATURES} -getbinpkg\"\nEMERGE_DEFAULT_OPTS=\"${EMERGE_DEFAULT_OPTS} --getbinpkg=n --usepkg=n\"\nPORT_LOGDIR=\"/var/log/portage\"\n")?;
+    }
+    if let Some(opts) = c.build_jobs.makeopts() {
+        conf.write_all(format!("MAKEOPTS=\"{opts}\"\n").as_bytes())?;
     }
     fs::create_dir_all(format!("{ROOT}/var/log/portage"))?;
     let resolver = Path::new(ROOT).join("etc/resolv.conf");
@@ -650,10 +671,17 @@ mod tests {
     #[test]
     fn index_parsing() {
         assert_eq!(
-            parse_name("stage3-amd64-systemd-20261116.tar.xz 123\n", "amd64").unwrap(),
+            parse_name("stage3-amd64-systemd-20261116.tar.xz 123\n", "stage3-amd64-systemd").unwrap(),
             "stage3-amd64-systemd-20261116.tar.xz"
         );
-        assert!(parse_name("../bad 42", "amd64").is_err());
+        assert!(parse_name("../bad 42", "stage3-amd64-systemd").is_err());
+        assert_eq!(
+            parse_name("stage3-arm64-desktop-systemd-20261115T230104Z.tar.xz 100\n",
+                "stage3-arm64-desktop-systemd").unwrap(),
+            "stage3-arm64-desktop-systemd-20261115T230104Z.tar.xz"
+        );
+        assert!(parse_name("stage3-arm64-systemd-20261115.tar.xz 100\n",
+            "stage3-arm64-desktop-systemd").is_err());
     }
     #[test]
     fn checksum_is_bound_to_archive_name() {
