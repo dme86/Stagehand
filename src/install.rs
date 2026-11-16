@@ -253,8 +253,13 @@ fn preflight(c: &Config) -> Result<()> {
     Ok(())
 }
 pub fn arch() -> Result<&'static str> {
-    let out = Command::new("uname").arg("-m").output().context("Detect running Linux architecture")?;
-    if !out.status.success() { bail!("Cannot read live-system architecture from uname"); }
+    let out = Command::new("uname")
+        .arg("-m")
+        .output()
+        .context("Detect running Linux architecture")?;
+    if !out.status.success() {
+        bail!("Cannot read live-system architecture from uname");
+    }
     let actual = String::from_utf8(out.stdout)?;
     let detected = match actual.trim() {
         "x86_64" | "amd64" => "amd64",
