@@ -1,6 +1,83 @@
 use crate::disks::Disk;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stage3 {
+    Base,
+    Desktop,
+}
+impl Stage3 {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Base => "Systemd base (default)",
+            Self::Desktop => "Systemd desktop",
+        }
+    }
+    pub fn archive_prefix(self, architecture: &str) -> String {
+        match self {
+            Self::Base => format!("stage3-{architecture}-systemd"),
+            Self::Desktop => format!("stage3-{architecture}-desktop-systemd"),
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Network {
+    Networkd,
+    NetworkManager,
+}
+impl Network {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Networkd => "systemd-networkd (wired DHCP)",
+            Self::NetworkManager => "NetworkManager (Wi-Fi capable)",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuildJobs {
+    Auto,
+    Two,
+    Four,
+}
+impl BuildJobs {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "Automatic (Portage default)",
+            Self::Two => "2 parallel build jobs",
+            Self::Four => "4 parallel build jobs",
+        }
+    }
+    pub fn makeopts(self) -> Option<&'static str> {
+        match self {
+            Self::Auto => None,
+            Self::Two => Some("-j2"),
+            Self::Four => Some("-j4"),
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Editor {
+    None,
+    Nano,
+    Vim,
+}
+impl Editor {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::Nano => "nano (default)",
+            Self::Vim => "vim",
+        }
+    }
+    pub fn package(self) -> Option<&'static str> {
+        match self {
+            Self::None => None,
+            Self::Nano => Some("app-editors/nano"),
+            Self::Vim => Some("app-editors/vim"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Filesystem {
     Btrfs,
     Ext4,
@@ -79,6 +156,11 @@ impl Bootloader {
 #[derive(Clone)]
 pub struct Config {
     pub disk: Option<Disk>,
+    pub stage3: Stage3,
+    pub network: Network,
+    pub build_jobs: BuildJobs,
+    pub editor: Editor,
+    pub cronie: bool,
     pub filesystem: Filesystem,
     pub swap: Swap,
     pub locale: Locale,
@@ -99,6 +181,11 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             disk: None,
+            stage3: Stage3::Base,
+            network: Network::Networkd,
+            build_jobs: BuildJobs::Auto,
+            editor: Editor::Nano,
+            cronie: false,
             filesystem: Filesystem::Btrfs,
             swap: Swap::None,
             locale: Locale::English,
@@ -211,6 +298,11 @@ mod tests {
     #[test]
     fn default_requires_disk_and_credentials() {
         assert!(Config::default().validate().is_err());
+        assert_eq!(Config::default().stage3, Stage3::Base);
+        assert_eq!(Config::default().network, Network::Networkd);
+        assert_eq!(Config::default().build_jobs, BuildJobs::Auto);
+        assert_eq!(Config::default().editor, Editor::Nano);
+        assert!(!Config::default().cronie);
         assert_eq!(Config::default().filesystem, Filesystem::Btrfs);
         assert_eq!(Config::default().swap, Swap::None);
         assert_eq!(Config::default().locale, Locale::English);
@@ -253,6 +345,14 @@ mod tests {
 
     #[test]
     fn accept_common_settings() {
+        assert_eq!(Stage3::Base.archive_prefix("amd64"), "stage3-amd64-systemd");
+        assert_eq!(
+            Stage3::Desktop.archive_prefix("arm64"),
+            "stage3-arm64-desktop-systemd"
+        );
+        assert_eq!(BuildJobs::Auto.makeopts(), None);
+        assert_eq!(BuildJobs::Four.makeopts(), Some("-j4"));
+        assert_eq!(Editor::Nano.package(), Some("app-editors/nano"));
         assert!(valid_hostname("gentoo-test"));
         assert!(valid_timezone("Europe/Berlin"));
         assert!(valid_username("dan"));

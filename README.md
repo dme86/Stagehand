@@ -10,33 +10,37 @@ A keyboard-first, guided **Gentoo Linux installer written in Rust**. Inspired by
 Stagehand lets you configure an installation in a clean terminal interface,
 review every decision, and install only after explicit confirmation.
 
-> **Early development (v0.3.0).** The installer has not yet passed an end-to-end
+> **Early development (v0.4.0).** The installer has not yet passed an end-to-end
 > UEFI VM boot test. **Do not run it against a disk containing valuable data.**
 > Use a disposable virtual machine until the installation and boot path are validated.
 
 ## One screen, all the important choices
 
 ```text
-┌ Welcome ───────────────────────────────────────────────────────────────┐
-│ STAGEHAND              Gentoo installer · v0.2.0 · AMD64 / x86_64      │
-├ Installation settings ───┬ Details ────────────────────────────────────┤
-│ › Storage                │ Welcome to Stagehand.                      │
-│     /dev/vda             │                                            │
-│ › System                 │ Installation profile:                      │
-│     gentoo, Europe/...   │ • Official Gentoo systemd Stage3           │
-│ › Kernel & boot          │ • gentoo-kernel-bin (default)               │
-│     bin · systemd-boot   │ • systemd-boot (default)                   │
-│ › Network                │ • GPT / UEFI / Btrfs                       │
-│     Wired DHCP          │ • AMD64 or ARM64 detected at runtime       │
-│ › Users                  │                                            │
-│     dan                 │ Enter a category to configure its options.│
-│ ▶ Install Gentoo         │ Nothing written before final confirmation.│
+┌ Welcome ────────────────────────────────────────────────────────────────┐
+│ STAGEHAND              Gentoo installer · v0.4.0 · AMD64 / x86_64       │
+├ Installation settings ───┬ Details ─────────────────────────────────────┤
+│ › Storage                │ Welcome to Stagehand.                       │
+│     /dev/vda · Btrfs     │                                            │
+│ › System                 │ Installation profile:                       │
+│     Gentoo · Base Stage3 │ • Systemd Stage3: base / desktop            │
+│ › Kernel & boot          │ • Kernel: gentoo-kernel-bin                  │
+│     bin · systemd-boot   │ • Bootloader: systemd-boot                  │
+│ › Network                │ • Filesystem: Btrfs / ext4                  │
+│     systemd-networkd    │ • Network: networkd / NetworkManager        │
+│ › Users                  │ • Portage: binary packages preferred        │
+│     dan                 │                                            │
+│ › Portage                │ Enter any category to configure it.         │
+│     Binpkg · Auto jobs  │ The final ERASE confirmation is required.   │
+│ › System tools           │                                            │
+│     nano · Cron off     │                                            │
+│ ▶ Install Gentoo         │                                            │
 ├ Keys ────────────────────┴────────────────────────────────────────────┤
-│ ↑↓/j/k Navigate   Enter Open   q Quit                                 │
-└───────────────────────────────────────────────────────────────────────┘
+│ ↑↓/j/k Navigate   Enter Open   q Quit                                  │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
-The main menu is organized into **Storage**, **System**, **Kernel & boot**, **Network**, **Users** and **Portage** submenus, plus a separate final installation action.
+The main menu is organized into **Storage**, **System**, **Kernel & boot**, **Network**, **Users**, **Portage** and **System tools** submenus, plus a separate final installation action.
 
 The interface uses **ratatui + crossterm** with a compact Gruvbox-inspired color
 scheme. It runs entirely in the terminal and does not require Python, Ansible,
@@ -45,10 +49,12 @@ a graphical environment, or a desktop environment.
 ### What you configure
 
 - Target disk with a non-destructive inspection of partition tables and filesystem signatures. Existing data is clearly marked; mounted, read-only and removable disks are unavailable.
-- Hostname, timezone, console keymap and a UTF-8 system locale.
+- Hostname, timezone, console keymap, UTF-8 locale and standard or desktop systemd Stage3.
 - Kernel package and bootloader in the **Kernel & boot** submenu.
 - Filesystem: Btrfs (default) or ext4; optional 4 GiB swap partition (minimum 16 GiB target).
-- Portage: prefer binary packages (default) or compile from source.
+- Portage: prefer binary packages (default) or compile from source; automatic, 2-job or 4-job MAKEOPTS.
+- Networking: systemd-networkd with wired DHCP (default) or NetworkManager with Ethernet/Wi-Fi support.
+- System tools: optional cronie daemon and a preferred text editor (none, nano or vim).
 - Local administrator account and root credentials, with password confirmation.
 - Optional SSH with public-key authentication (password SSH and root SSH disabled).
 - Final installation review and a mandatory typed `ERASE /dev/...` confirmation.
@@ -61,17 +67,17 @@ The initial installation profile follows the base system from
 | Component | Default |
 | --- | --- |
 | Architecture | Native amd64 or arm64 |
-| Init | systemd stage3 |
+| Init | systemd; base Stage3 (default) or desktop Stage3 |
 | Partitioning | GPT, 512 MiB FAT32 ESP, optional 4 GiB swap, remaining space for root |
 | Subvolumes | `@` mounted at `/`, `@home` at `/home` |
 | Filesystem | Btrfs with zstd compression (default) or ext4 |
 | Kernel | `gentoo-kernel-bin` (default) or `gentoo-kernel` (source build) |
 | Bootloader | systemd-boot (default) or GRUB, UEFI |
-| Networking | systemd-networkd, DHCP on wired interfaces |
-| Package management | Portage, binary packages preferred by default, source-only optional |
+| Networking | systemd-networkd with wired DHCP (default) or NetworkManager |
+| Package management | Portage, binary packages preferred; optional source builds; configurable MAKEOPTS |
 | Console and locale | Configurable keymap; en_US.UTF-8 (default), de_DE.UTF-8 or C.UTF-8 |
 
-Stagehand detects its **native live-system architecture** at runtime (`x86_64` → `amd64`, `aarch64` → `arm64`) and downloads only the corresponding systemd stage3. No Gentoo ISO download is necessary: boot a Linux live system first. Cross-architecture installations are intentionally unsupported.
+Stagehand detects its **native live-system architecture** at runtime (`x86_64` → `amd64`, `aarch64` → `arm64`) and downloads only the selected base or desktop systemd stage3. No Gentoo ISO download is necessary: boot a Linux live system first. Cross-architecture installations are intentionally unsupported.
 
 The official systemd stage3 is downloaded and **SHA-256 verified before any disk
 writes occur**. Installation logs are written to `/tmp/stagehand-install.log`,
@@ -121,11 +127,12 @@ Stagehand does **not** download or create a live ISO. It is a Linux binary desig
 The left-hand main menu deliberately stays small:
 
 - **Storage** — installation disk, Btrfs/ext4 filesystem and optional 4 GiB swap.
-- **System** — hostname, timezone, keymap and UTF-8 locale.
+- **System** — hostname, timezone, keymap, UTF-8 locale, base/desktop Stage3.
 - **Kernel & boot** — `gentoo-kernel-bin` or `gentoo-kernel`; systemd-boot or GRUB (UEFI).
-- **Network** — wired DHCP, optional key-only SSH and public key.
+- **Network** — systemd-networkd or NetworkManager, optional key-only SSH and public key.
 - **Users** — administrator name/password and root password.
-- **Portage** — binary packages preferred or builds from source.
+- **Portage** — binary packages preferred or source builds; automatic, two or four parallel build jobs.
+- **System tools** — nano/vim/no additional editor, optional cronie.
 - **Install Gentoo** — full summary and typed `ERASE /dev/...` confirmation.
 
 Selecting `gentoo-kernel` builds the distribution kernel from source and can be slower, while `gentoo-kernel-bin` is recommended for a first installation. Stagehand configures `sys-kernel/installkernel` USE flags to match the chosen bootloader and verifies boot artifacts before reporting success.
@@ -152,7 +159,7 @@ Gentoo installer. In particular:
 - UEFI only; no BIOS/legacy boot.
 - Whole-disk installs only; no partition preservation, LUKS or dual-boot.
 - Wired DHCP only; Wi-Fi and advanced network setup are not yet configured.
-- systemd/UEFI only; Btrfs/ext4, kernel, swap and UEFI bootloader are selectable.
+- systemd/UEFI only; Stage3 flavor, Btrfs/ext4, kernel, swap, network manager and UEFI bootloader are selectable.
 - No automated integration test booting the resulting disk yet.
 - Re-running the installation is destructive; no resume support.
 - SHA-256 validation protects downloaded archives against accidental corruption,
@@ -182,6 +189,34 @@ OpenRC, custom Portage profiles/USE flags, advanced partitioning, LUKS,
 Secure Boot, Wi-Fi, static IP configuration and opt-in desktop installation remain
 outside the supported profile. Rust CI is not a substitute for a real boot
 test: use a disposable UEFI QEMU disk before trusting a new configuration.
+
+
+## Gentoo Handbook coverage
+
+Stagehand v0.4.0 incorporates additional choices from the official
+[Gentoo AMD64 Handbook](https://wiki.gentoo.org/wiki/Handbook:AMD64).
+Both AMD64 and ARM64 offer standard and desktop systemd Stage3 archives; desktop
+Stage3 includes extra development tools, **not a preinstalled graphical environment**.
+Stagehand downloads and verifies the selected archive before modifying the disk.
+
+For network management, choose the default `systemd-networkd` with wired DHCP,
+or `NetworkManager` for Ethernet/Wi-Fi management. NetworkManager installs with
+Wi-Fi support, but **does not connect to a wireless SSID during installation**:
+configure wireless credentials after the first boot. An active wired network is
+required by the installer itself.
+
+Portage can keep automatic `MAKEOPTS` (the recommended setting) or request
+`-j2` / `-j4`. The Handbook suggests allowing approximately 2 GiB RAM per
+simultaneous build job. The separate System tools submenu offers the optional
+`cronie` service and nano/vim editors. Systemd already supplies journald and
+timer units, so no separate logging daemon or scheduler is required by default.
+
+For now the installer remains a guided **systemd/UEFI, whole-disk** installer.
+The Handbook also covers OpenRC, multilib/no-multilib Stage3, custom Gentoo
+profiles/USE flags, Legacy BIOS boot, detailed partitioning, Secure Boot and
+manual kernel compilation. Those need dedicated installation workflows and
+integration testing rather than exposing settings that Stagehand cannot reliably
+apply yet. **Rust CI validates code, not successful Gentoo boot.**
 
 ## Development
 

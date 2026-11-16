@@ -1,5 +1,7 @@
 use crate::{
-    config::{Bootloader, Config, Filesystem, Kernel, Locale, Swap},
+    config::{
+        Bootloader, BuildJobs, Config, Editor, Filesystem, Kernel, Locale, Network, Stage3, Swap,
+    },
     disks::{self, Disk},
     install::{self, Event},
 };
@@ -40,6 +42,7 @@ enum Section {
     Network,
     Users,
     Portage,
+    Tools,
 }
 impl Section {
     fn title(self) -> &'static str {
@@ -50,16 +53,24 @@ impl Section {
             Self::Network => "Network",
             Self::Users => "Users",
             Self::Portage => "Portage",
+            Self::Tools => "System tools",
         }
     }
     fn entries(self) -> &'static [&'static str] {
         match self {
             Self::Storage => &["Installation disk", "Root filesystem", "Swap"],
-            Self::System => &["Hostname", "Timezone", "Console keymap", "System locale"],
+            Self::System => &[
+                "Hostname",
+                "Timezone",
+                "Console keymap",
+                "System locale",
+                "Stage3 type",
+            ],
             Self::Boot => &["Kernel", "Bootloader"],
-            Self::Network => &["SSH service", "SSH public key"],
+            Self::Network => &["Network manager", "SSH service", "SSH public key"],
             Self::Users => &["Username", "User password", "Root password"],
-            Self::Portage => &["Binary packages"],
+            Self::Portage => &["Binary packages", "Build jobs"],
+            Self::Tools => &["Editor", "Cron daemon"],
         }
     }
 }
@@ -103,18 +114,25 @@ enum Choice {
     Filesystem,
     Swap,
     Locale,
+    Stage3,
+    Network,
+    BuildJobs,
+    Editor,
 }
 impl Choice {
     fn section(self) -> Section {
         match self {
             Self::Filesystem | Self::Swap => Section::Storage,
-            Self::Locale => Section::System,
+            Self::Locale | Self::Stage3 => Section::System,
+            Self::Network => Section::Network,
+            Self::BuildJobs => Section::Portage,
+            Self::Editor => Section::Tools,
             Self::Kernel | Self::Bootloader => Section::Boot,
         }
     }
     fn count(self) -> usize {
         match self {
-            Self::Locale => 3,
+            Self::Locale | Self::BuildJobs | Self::Editor => 3,
             _ => 2,
         }
     }
@@ -224,6 +242,18 @@ impl App {
                 Locale::German => 1,
                 Locale::Utf8 => 2,
             },
+            Choice::Stage3 => usize::from(self.config.stage3 == Stage3::Desktop),
+            Choice::Network => usize::from(self.config.network == Network::NetworkManager),
+            Choice::BuildJobs => match self.config.build_jobs {
+                BuildJobs::Auto => 0,
+                BuildJobs::Two => 1,
+                BuildJobs::Four => 2,
+            },
+            Choice::Editor => match self.config.editor {
+                Editor::None => 0,
+                Editor::Nano => 1,
+                Editor::Vim => 2,
+            },
         };
         self.page = Page::Pick(choice);
         self.error.clear();
@@ -238,14 +268,19 @@ impl App {
             (Section::System, 1) => self.edit(Field::Timezone),
             (Section::System, 2) => self.edit(Field::Keymap),
             (Section::System, 3) => self.pick(Choice::Locale),
+            (Section::System, 4) => self.pick(Choice::Stage3),
             (Section::Boot, 0) => self.pick(Choice::Kernel),
             (Section::Boot, 1) => self.pick(Choice::Bootloader),
-            (Section::Network, 0) => self.config.ssh_enabled = !self.config.ssh_enabled,
-            (Section::Network, 1) => self.edit(Field::SshKey),
+            (Section::Network, 0) => self.pick(Choice::Network),
+            (Section::Network, 1) => self.config.ssh_enabled = !self.config.ssh_enabled,
+            (Section::Network, 2) => self.edit(Field::SshKey),
             (Section::Users, 0) => self.edit(Field::Username),
             (Section::Users, 1) => self.edit(Field::UserPassword),
             (Section::Users, 2) => self.edit(Field::RootPassword),
             (Section::Portage, 0) => self.config.binary_packages = !self.config.binary_packages,
+            (Section::Portage, 1) => self.pick(Choice::BuildJobs),
+            (Section::Tools, 0) => self.pick(Choice::Editor),
+            (Section::Tools, 1) => self.config.cronie = !self.config.cronie,
             _ => {}
         }
     }
@@ -289,10 +324,10 @@ impl App {
                     self.main_index = self.main_index.saturating_sub(1)
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
-                    self.main_index = (self.main_index + 1).min(6)
+                    self.main_index = (self.main_index + 1).min(7)
                 }
                 KeyCode::Home => self.main_index = 0,
-                KeyCode::End => self.main_index = 6,
+                KeyCode::End => self.main_index = 7,
                 KeyCode::Enter | KeyCode::Right | KeyCode::Char(' ') => {
                     let section = match self.main_index {
                         0 => Some(Section::Storage),
@@ -301,6 +336,7 @@ impl App {
                         3 => Some(Section::Network),
                         4 => Some(Section::Users),
                         5 => Some(Section::Portage),
+                        6 => Some(Section::Tools),
                         _ => None,
                     };
                     if let Some(section) = section {
@@ -396,6 +432,34 @@ impl App {
                                 0 => Locale::English,
                                 1 => Locale::German,
                                 _ => Locale::Utf8,
+                            }
+                        }
+                        Choice::Stage3 => {
+                            self.config.stage3 = if self.choice_index == 0 {
+                                Stage3::Base
+                            } else {
+                                Stage3::Desktop
+                            }
+                        }
+                        Choice::Network => {
+                            self.config.network = if self.choice_index == 0 {
+                                Network::Networkd
+                            } else {
+                                Network::NetworkManager
+                            }
+                        }
+                        Choice::BuildJobs => {
+                            self.config.build_jobs = match self.choice_index {
+                                0 => BuildJobs::Auto,
+                                1 => BuildJobs::Two,
+                                _ => BuildJobs::Four,
+                            }
+                        }
+                        Choice::Editor => {
+                            self.config.editor = match self.choice_index {
+                                0 => Editor::None,
+                                1 => Editor::Nano,
+                                _ => Editor::Vim,
                             }
                         }
                     }
@@ -523,7 +587,7 @@ fn render(frame: &mut Frame, app: &App) {
             Style::default().fg(AMBER).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            "Gentoo installer  ·  v0.2.0  ·  ",
+            "Gentoo installer  ·  v0.4.0  ·  ",
             Style::default().fg(MUTED),
         ),
         Span::styled(arch_label(), Style::default().fg(AQUA)),
@@ -578,15 +642,17 @@ fn section_value(app: &App, section: Section, index: usize) -> String {
         (Section::System, 1) => app.config.timezone.clone(),
         (Section::System, 2) => app.config.keymap.clone(),
         (Section::System, 3) => app.config.locale.label().into(),
+        (Section::System, 4) => app.config.stage3.label().into(),
         (Section::Boot, 0) => app.config.kernel.label().into(),
         (Section::Boot, 1) => app.config.bootloader.label().into(),
-        (Section::Network, 0) => if app.config.ssh_enabled {
+        (Section::Network, 0) => app.config.network.label().into(),
+        (Section::Network, 1) => if app.config.ssh_enabled {
             "Enabled"
         } else {
             "Disabled"
         }
         .into(),
-        (Section::Network, 1) => if app.config.ssh_public_key.is_empty() {
+        (Section::Network, 2) => if app.config.ssh_public_key.is_empty() {
             "Not set"
         } else {
             "Configured"
@@ -615,6 +681,14 @@ fn section_value(app: &App, section: Section, index: usize) -> String {
             "Prefer binary packages"
         } else {
             "Compile from source"
+        }
+        .into(),
+        (Section::Portage, 1) => app.config.build_jobs.label().into(),
+        (Section::Tools, 0) => app.config.editor.label().into(),
+        (Section::Tools, 1) => if app.config.cronie {
+            "cronie enabled"
+        } else {
+            "Disabled"
         }
         .into(),
         _ => String::new(),
@@ -685,6 +759,10 @@ fn render_menu(frame: &mut Frame, area: Rect, app: &App) {
                         }
                         .into(),
                     ),
+                    (
+                        "System tools".into(),
+                        format!("Editor: {}", app.config.editor.label()),
+                    ),
                     ("Install Gentoo".into(), "Review & install".into()),
                 ],
                 app.main_index,
@@ -695,7 +773,7 @@ fn render_menu(frame: &mut Frame, area: Rect, app: &App) {
         .iter()
         .enumerate()
         .map(|(i, (name, value))| {
-            let special = section.is_none() && i == 6;
+            let special = section.is_none() && i == 7;
             let marker = if special { "▶" } else { "›" };
             ListItem::new(vec![
                 Line::styled(
@@ -720,32 +798,35 @@ fn render_details(frame: &mut Frame, area: Rect, app: &App) {
         Page::Main => {
             let summary = match app.main_index {
                 0 => "Choose a disk. Stagehand checks existing partition tables and known filesystem signatures without modifying data.",
-                1 => "Configure hostname, timezone, console keymap and system locale.",
+                1 => "Configure hostname, timezone, console keymap, locale and base/desktop Stage3.",
                 2 => "Choose the Gentoo kernel package and an EFI bootloader. Both choices affect the actual installation.",
-                3 => "Wired DHCP is enabled by default. SSH is optional and requires an authorized public key.",
+                3 => "Choose systemd-networkd (wired DHCP) or NetworkManager (Wi-Fi-capable). SSH is optional.",
                 4 => "Set a local administrator account and root credentials.",
-                5 => "Choose binary package preference for Portage. The shipped Gentoo stage3 binhost is retained.",
+                5 => "Choose binary package preference and parallel build jobs for Portage.",
+                6 => "Choose a console editor and optionally enable the cronie scheduler.",
                 _ => "Review every choice, then explicitly authorize installation on the selected disk.",
             };
             format!(
                 "Welcome to Stagehand.\n\n{summary}\n\n\
                 Installation profile:\n\
                 • Native architecture: {}\n\
-                • Official Gentoo systemd stage3 (auto-selected)\n\
+                • Stage3: {} (native architecture)\n\
                 • Kernel: {}\n\
                 • Bootloader: {}\n\
                 • GPT / UEFI, filesystem: {}\n\
                 • Swap: {}\n\
                 • Locale: {}\n\
-                • Wired DHCP via systemd-networkd\n\n\
+                • Network: {}\n\n\
                 Enter a category to configure its options.\n\
                 Nothing is written to a disk until final confirmation.",
                 arch_label(),
+                app.config.stage3.label(),
                 app.config.kernel.label(),
                 app.config.bootloader.label(),
                 app.config.filesystem.label(),
                 app.config.swap.label(),
-                app.config.locale.label()
+                app.config.locale.label(),
+                app.config.network.label()
             )
         }
         Page::Section(section) => {
@@ -759,20 +840,31 @@ fn render_details(frame: &mut Frame, area: Rect, app: &App) {
                 (Section::System, 0) => "Choose the installed system's hostname.",
                 (Section::System, 1) => "Select an IANA timezone, e.g. Europe/Berlin.",
                 (Section::System, 2) => "Choose a Linux console keymap, e.g. de or us.",
+                (Section::System, 3) =>
+                    "Choose a UTF-8 system locale: en_US, de_DE or C.UTF-8.",
                 (Section::System, _) =>
-                    "Choose a UTF-8 system locale: en_US, de_DE or C.UTF-8. Stagehand generates the selected locale.",
+                    "Base systemd Stage3 (default) or desktop systemd Stage3 with extra developer packages. Desktop Stage3 is not a window manager.",
                 (Section::Boot, 0) =>
                     "Binary: gentoo-kernel-bin is fast to install (default).\n\nSource: gentoo-kernel builds on the target and may take significantly longer.",
                 (Section::Boot, _) =>
                     "systemd-boot is the default for UEFI installs.\n\nGRUB offers a configurable menu and broader boot options. Both require UEFI in this version.",
                 (Section::Network, 0) =>
-                    "Enable key-only SSH access to the installed system. Password and root SSH login remain disabled.",
+                    "systemd-networkd provides wired DHCP (default). NetworkManager manages Ethernet and Wi-Fi; Wi-Fi credentials must be configured separately.",
+                (Section::Network, 1) =>
+                    "Enable SSH with public key authentication. Password/root SSH login stays disabled.",
                 (Section::Network, _) =>
                     "Paste an OpenSSH public key. Required only when SSH is enabled.",
                 (Section::Users, 0) => "Set the name of the local administrator.",
                 (Section::Users, 1) => "The administrator joins wheel with sudo permission.",
                 (Section::Users, _) => "Set a separate root password.",
-                (Section::Portage, _) => "Prefer Gentoo binary packages (default), or compile packages from source. The stage3 Portage configuration and binhost are preserved.",
+                (Section::Portage, 0) =>
+                    "Prefer Gentoo binary packages or compile from source. Preserve the Stage3 profile and binhost.",
+                (Section::Portage, _) =>
+                    "Use automatic Portage defaults (recommended) or 2/4 build jobs. Allow roughly 2 GiB RAM per parallel compile job.",
+                (Section::Tools, 0) =>
+                    "Select a console editor: none, nano (default) or vim.",
+                (Section::Tools, _) =>
+                    "Install/enable cronie for cron jobs, if needed. Systemd timers and built-in journald work without it.",
             };
             format!(
                 "{} / {}\n\n{}\n\nCurrent value:\n{}\n\n\
@@ -839,6 +931,25 @@ fn render_details(frame: &mut Frame, area: Rect, app: &App) {
                     "System locale",
                     &["en_US.UTF-8 (default)", "de_DE.UTF-8", "C.UTF-8"],
                 ),
+                Choice::Stage3 => (
+                    "Stage3 image",
+                    &[
+                        "Base systemd (default)",
+                        "Desktop systemd (includes extra development packages)",
+                    ],
+                ),
+                Choice::Network => (
+                    "Network manager",
+                    &[
+                        "systemd-networkd (wired DHCP)",
+                        "NetworkManager (Ethernet/Wi-Fi)",
+                    ],
+                ),
+                Choice::BuildJobs => (
+                    "Parallel builds",
+                    &["Automatic (default)", "2 jobs", "4 jobs"],
+                ),
+                Choice::Editor => ("Console editor", &["None", "nano (default)", "vim"]),
             };
             let options = options
                 .iter()
@@ -884,7 +995,7 @@ fn render_details(frame: &mut Frame, area: Rect, app: &App) {
             format!(
                 "FINAL REVIEW\n\n\
                 Architecture: {}\n\
-                Stage3:       systemd (native architecture)\n\
+                Stage3:       {}\n\
                 Target disk:  {path} ({size})\n\
                 Disk state:   {contents}\n\
                 Filesystem:   {}\n\
@@ -895,12 +1006,17 @@ fn render_details(frame: &mut Frame, area: Rect, app: &App) {
                 Timezone:     {}\n\
                 Locale:       {}\n\
                 Keymap:       {}\n\
+                Network:      {}\n\
+                Build jobs:   {}\n\
                 Portage:      {}\n\
+                Editor:       {}\n\
+                Cron:         {}\n\
                 User:         {}\n\
                 SSH:          {}\n\n\
                 WARNING: All data on {path} will be destroyed!\n\
                 Type: ERASE {path}\n\n> {}█",
                 arch_label(),
+                app.config.stage3.label(),
                 app.config.filesystem.label(),
                 app.config.swap.label(),
                 app.config.kernel.label(),
@@ -909,10 +1025,18 @@ fn render_details(frame: &mut Frame, area: Rect, app: &App) {
                 app.config.timezone,
                 app.config.locale.label(),
                 app.config.keymap,
+                app.config.network.label(),
+                app.config.build_jobs.label(),
                 if app.config.binary_packages {
                     "Binary preferred"
                 } else {
                     "Source builds"
+                },
+                app.config.editor.label(),
+                if app.config.cronie {
+                    "cronie enabled"
+                } else {
+                    "Disabled"
                 },
                 app.config.username,
                 if app.config.ssh_enabled {
@@ -920,7 +1044,7 @@ fn render_details(frame: &mut Frame, area: Rect, app: &App) {
                 } else {
                     "Disabled"
                 },
-                app.buffer
+                app.buffer,
             )
         }
         Page::Installing => format!(
