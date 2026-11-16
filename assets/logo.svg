@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1254" height="1254" viewBox="0 0 1254 1254" role="img" aria-label="Stagehand — a gentoo installer">
+<defs>
+ <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#e3bafc"/><stop offset=".44" stop-color="#ae7add"/><stop offset="1" stop-color="#493078"/></linearGradient>
+ <linearGradient id="face" x1=".15" y1=".08" x2=".82" y2=".9"><stop stop-color="#fffaff"/><stop offset=".28" stop-color="#e9d2fa"/><stop offset=".73" stop-color="#c69fec"/><stop offset="1" stop-color="#8562bc"/></linearGradient>
+ <linearGradient id="edge" x1="0" y1="0" x2=".5" y2="1"><stop stop-color="#ab84d4"/><stop offset="1" stop-color="#4f327e"/></linearGradient>
+ <linearGradient id="arrow" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#e7bef9"/><stop offset=".52" stop-color="#b586e7"/><stop offset="1" stop-color="#6d46ab"/></linearGradient>
+ <linearGradient id="tray" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#8980b1"/><stop offset="1" stop-color="#3d3359"/></linearGradient>
+ <linearGradient id="words" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#ffffff"/><stop offset=".5" stop-color="#f0ddff"/><stop offset="1" stop-color="#a27ccc"/></linearGradient>
+ <radialGradient id="led"><stop stop-color="#f7efff"/><stop offset=".5" stop-color="#dbb5ff"/><stop offset="1" stop-color="#7145b4"/></radialGradient>
+ <filter id="shadow" x="-.2" y="-.2" width="1.4" height="1.5"><feGaussianBlur in="SourceAlpha" stdDeviation="10" result="s"/><feOffset dx="0" dy="10" result="t"/><feComponentTransfer><feFuncA type="linear" slope=".48"/></feComponentTransfer><feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+ <mask id="hole"><rect width="1254" height="1254" fill="white"/><ellipse cx="555" cy="401" rx="53" ry="48" transform="rotate(21 555 401)" fill="black"/></mask>
+</defs>
+<!-- Interrupted circular frame -->
+<path d="M 297 715 A 377 377 0 1 1 931 712" fill="none" stroke="url(#ring)" stroke-width="39" stroke-linecap="round"/>
+<path d="M 419 843 Q 498 906 593 920" fill="none" stroke="url(#ring)" stroke-width="29" stroke-linecap="round" opacity=".7"/>
+<!-- Glossy Gentoo-inspired central emblem -->
+<g filter="url(#shadow)">
+ <path d="M 414 293 C 510 220 612 256 696 319 L 805 411 C 859 455 870 491 821 537 L 521 799 C 468 847 380 829 349 776 C 323 735 343 703 380 659 L 501 509 L 376 427 C 329 396 351 345 414 293Z" fill="url(#edge)" transform="translate(1 18)"/>
+ <path d="M 414 293 C 510 220 612 256 696 319 L 805 411 C 859 455 870 491 821 537 L 521 799 C 468 847 380 829 349 776 C 323 735 343 703 380 659 L 501 509 L 376 427 C 329 396 351 345 414 293Z" fill="url(#face)" stroke="#faf0ff" stroke-width="7" mask="url(#hole)"/>
+ <ellipse cx="555" cy="401" rx="53" ry="48" transform="rotate(21 555 401)" fill="url(#edge)" stroke="#f7edff" stroke-width="6"/>
+ <ellipse cx="559" cy="408" rx="39" ry="34" transform="rotate(21 559 408)" fill="#21152c"/>
+</g>
+<!-- Arrow into recessed tray -->
+<path d="M 752 554 Q 751 539 766 532 L 811 505 Q 826 494 826 512 L 828 709 L 885 708 Q 902 708 894 725 L 813 816 Q 802 832 791 818 L 699 724 Q 685 710 709 710 L 751 709Z" fill="url(#arrow)" stroke="#e5baff" stroke-width="6"/>
+<path d="M 594 784 H 690 Q 709 784 713 805 L 716 820 Q 718 836 738 836 H 829 Q 851 836 855 820 L 857 809 Q 862 784 884 784 H 928 Q 951 784 951 809 V 851 Q 951 879 922 879 H 594 Q 571 879 571 852 V 810 Q 571 784 594 784Z" fill="url(#tray)" stroke="#a595cd" stroke-width="5"/>
+<circle cx="912" cy="833" r="18" fill="url(#led)" stroke="#eee1ff" stroke-width="3"/>
+<!-- Wordmark -->
+<text x="627" y="1040" text-anchor="middle" font-family="DejaVu Sans,Arial,sans-serif" font-size="113" font-weight="500" letter-spacing="-4" fill="url(#words)" stroke="#6b4a99" stroke-width="2" paint-order="stroke">Stagehand</text>
+<text x="627" y="1134" text-anchor="middle" font-family="DejaVu Sans,Arial,sans-serif" font-size="46" font-weight="500" letter-spacing="10" fill="#a27bd2">a gentoo installer</text>
+</svg>
